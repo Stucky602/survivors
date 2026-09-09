@@ -27,7 +27,7 @@
     "AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     "BATCH_LIMIT": "25"
   },
-  "observability": { "enabled": true }
+  "observability": { "enabled": true },
   // Secrets, set with `wrangler secret put`: PLATPRICES_KEY, ADMIN_TOKEN
 "workers_dev": true,
 }
