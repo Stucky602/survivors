@@ -13,7 +13,7 @@
     {
       "binding": "DB",
       "database_name": "survivors",
-      "database_id": "REPLACE_WITH_ID_FROM_wrangler_d1_create",
+      "database_id": "e5cb7235-cc15-488f-834b-70fe55cd7803",
       "migrations_dir": "migrations"
     }
   ],
