@@ -29,4 +29,5 @@
   },
   "observability": { "enabled": true }
   // Secrets, set with `wrangler secret put`: PLATPRICES_KEY, ADMIN_TOKEN
+"workers_dev": true,
 }
