@@ -1,0 +1,165 @@
+# Survivors-like PSN tracker: architecture v0.1
+
+Status: v0.1 built Sep 9 2026. Sections 1 to 6 describe what is in the repo.
+Decisions already made in chat: public site, one real user, $0/month, hybrid tagging (AI first pass, Kevin confirms high scorers), hub is both a filter and a weight.
+
+## 1. What the site does
+
+Tracks every survivors-like on Steam, finds out which ones are on the US PlayStation Store, watches their prices, and ranks them against Kevin's taste profile.
+
+Four pages plus two admin pages:
+
+| Page | What it shows |
+|---|---|
+| Upcoming | Steam-tagged games with no PSN listing yet, plus PSN listings flagged `IsPreorder`. Sorted by taste score, then Steam release date. |
+| On sale | Matched games where `IsOnSale = 1`, with sale end date, discount, and whether this is the lowest price the site has seen. |
+| Browse | The whole matched catalog with the facet filters and the score. |
+| Game | One game: facts, evidence, price line, links to Steam and PS Store. |
+| Queue (admin) | Three lists: PSN matches to confirm, facet tags to confirm (score >= 70), games with stale data. |
+| Settings (admin) | Weight sliders, hard-gate toggles, owned/never lists, Steam tag set, API budget readout. |
+
+Admin pages need a token typed once into the browser. Public pages need nothing.
+
+## 2. Data flow
+
+```
+Steam tag pages ──> candidates ──> Steam enrich ──> PSN match ──> price refresh ──> facet tagging ──> score
+   (daily)          (D1)          (on new, weekly)   (on new,       (daily)          (on new,        (client-side,
+                                                     retry weekly)                    on review       from weights)
+                                                                                      growth)
+```
+
+Every stage writes to D1. Every stage is a separate function with its own row in `run_log`. A stage failing does not stop the next cron tick from running the others.
+
+### 2.1 Discover (daily)
+
+Source: Steam store search with tag filters. Steam's search results endpoint returns JSON when asked (`/search/results/?json=1&infinite=1&tags=...`). Tag IDs get resolved once from the tag hub page at build time and stored in settings, not hardcoded.
+
+Default tag set: Bullet Heaven. Secondary: Roguelite AND (Action Roguelike OR Auto Battler), admitted only if the store page text mentions auto-attack, auto-fire, or survivors. Kevin can edit the set in Settings.
+
+Output: rows in `games` keyed by Steam appid. New rows get `status = 'new'`.
+
+### 2.2 Steam enrich (on new, then weekly)
+
+Two free, keyless endpoints:
+
+- `store.steampowered.com/api/appdetails?appids=N`: name, short and long description, release date, genres, developer, publisher, header image, Metacritic score if any.
+- `store.steampowered.com/appreviews/N?json=1&language=english&filter=all&num_per_page=20`: review summary, total positive and negative, and the 20 most helpful reviews.
+
+Plus one HTML fetch of the store page for tag vote counts (embedded as JSON in the page). Age-gated pages need the `birthtime` cookie. If the fetch fails the tag counts stay null and the game is still processed.
+
+Stored raw in `steam_cache` so the tagging stage can rerun without refetching.
+
+### 2.3 PSN match (on new, retry weekly for unmatched)
+
+1. `GET /api/v2/games/search?q=<steam name>&region=us` on PlatPrices. One request, up to 200 name matches.
+2. Workers AI reads the Steam entry and the candidate list and returns `{ppid, confidence, reason}` or `no_match`. Rules: prefer `StoreClass = FULL_GAME`, prefer the standard edition, group by `ConceptID`.
+3. confidence >= 0.9: accept. 0.6 to 0.9: Queue. Below 0.6 or no candidates: `psn_status = 'not_listed'`, retry in 7 days.
+
+A game that stays `not_listed` is by definition Upcoming. Nothing else has to be built for that section.
+
+### 2.4 Price refresh (daily)
+
+`GET /api/v2/games/batch?ppids=...&region=us`, 25 per call (Free plan page size). Fields requested: prices, `IsOnSale`, `DiscPerc`, `DiscountedUntil`, `IsPreorder`, `IsDelisted`, `StarRating`, `StarRatingCount`, `PSPExtra`, `PSPPremium`, `LowestEverPrice`.
+
+Budget math on the Free plan (1,000 requests/month):
+
+| Matched games | Batch calls/day | Calls/month |
+|---|---|---|
+| 250 | 10 | 300 |
+| 500 | 20 | 600 |
+| 600 | 24 | 720 |
+
+Reserve 150/month for searches and retries. The worker reads `X-RateLimit-Remaining` on every response and stops price refreshes for the month when it drops below the reserve; the site shows "prices last refreshed <date>" rather than failing silently. Hard cap on matched games: 600. Past that, oldest-unowned-lowest-score games drop to weekly refresh.
+
+Price history: the Free plan returns none, so the site keeps its own. A `price_snapshots` row is written only when a price changes, so the table stays small. This is the site's own observation log of its own watchlist, which the terms allow ("cache results in your own database"). It is not a mirror of the catalogue. "Lowest seen" on the site means lowest the site has seen, and says so.
+
+Attribution: "Prices via PlatPrices" with a link, on every page that shows a price. Required on the Free plan.
+
+### 2.5 Facet tagging (on new, and again when the Steam review count doubles)
+
+Input corpus per game, assembled from cache:
+
+- Steam short and long description
+- 20 most helpful Steam reviews
+- PS Store description and star rating (from the batch call)
+- Steam tag votes
+- Any matching item from the Rogueliker or Choost RSS feeds, matched by name
+
+Model: Workers AI, free allocation (10k neurons/day). One call per game. The system prompt is `docs/TAGGING_PROMPT.md` (to be written from sections 17 to 21 of the ChatGPT schema). Output is the facet JSON in `schema/facets.json` with an `evidence` string per judged facet.
+
+Hybrid rule: if the first-pass score is >= 70, or any hard gate is within 1 point of its threshold, the game lands in Queue. Kevin confirms, edits, or rejects. Confirmed facets get `confirmed_by = 'kevin'` and are never overwritten by a rerun; a rerun on a confirmed game writes to a `proposed` column instead and shows a diff in Queue.
+
+Cost: zero. Roughly 1,500 tokens in, 400 out per game. A 600-game backfill is a few days of the free allocation at a cautious 100 games per day.
+
+### 2.6 Score (client-side)
+
+Pure function `score(facets, weights, gates)` in `src/lib/score.js`. Runs in the browser from the weights in Settings, so moving a slider re-ranks instantly and nothing is refetched. The same function runs in the worker to decide the Queue threshold. One implementation, imported by both.
+
+Rules, from the schema:
+
+- Hard gates zero the score: first-person, manual primary attack, idle game, horde < 4.
+- Freeform building: -25. Shallow progression (depth <= 3): -20.
+- Weighted sum of the 0-10 facets, weights in `schema/weights.default.json`, summing to 100.
+- Quality is computed, not judged: Steam positive %, Steam review count, PSN star rating, PSN rating count, blended with a low-count discount. Under 50 reviews across both stores forces category `wildcard`.
+
+## 3. Hosting
+
+All on Kevin's existing Cloudflare account, all Free tier.
+
+| Piece | Service | Notes |
+|---|---|---|
+| Static site | The same Worker, assets binding | Vite + React, built to `dist/` on deploy. One deployable, not Pages plus a Worker. |
+| API + cron | One Worker, `survivors` | Deployed from the repo by Cloudflare's GitHub integration, not pasted into the dashboard. The LTB worker diverged from its repo copy because nothing deployed it; this project does not repeat that. |
+| Database | D1 | Free: 5 GB, 5M row reads/day, 100K writes/day. This site is thousands of rows, not millions. |
+| Model | Workers AI | Free allocation, 10k neurons/day. |
+| Cron | Worker cron triggers | Free plan allows 3 schedules per Worker. Used: `0 9 * * *` (discover + price refresh), `30 9 * * *` (enrich + match + tag, capped batch), `0 21 * * *` (retry failures). |
+
+Two known Free-tier constraints and how they're handled:
+
+- **10 ms CPU per invocation.** Fetch time doesn't count, but JSON parsing of 20 reviews and the tag scrape does. Each cron tick processes a capped batch (25 games) and re-queues the rest. A backfill of 600 games takes about a month at that pace through the cron alone, so there's also an admin "Run stage now" button that loops the batch in the browser, one call per click cycle, for the initial load.
+- **No retries, no failure alerts on cron.** Every stage writes `run_log` (stage, started, finished, ok, count, error). The Queue page shows a red bar if the last tick of any stage failed or if no tick has run in 36 hours.
+
+## 4. D1 tables
+
+```
+games            appid PK, name, steam_release, developer, publisher, header_img, status, psn_status, ppid FK, concept_id, first_seen, last_enriched
+steam_cache      appid PK, appdetails_json, appreviews_json, tag_votes_json, fetched_at
+psn_products     ppid PK, appid FK, concept_id, product_name, edition, store_class, psn_url, is_preorder, is_delisted, base_price, sale_price, plus_price, disc_perc, discounted_until, star_rating, star_count, psp_extra, psp_premium, lowest_seen, refreshed_at
+price_snapshots  id PK, ppid FK, observed_at, base_price, sale_price, plus_price
+facets           appid PK, version, facets_json, evidence_json, proposed_json, model, tagged_at, confirmed_by, confirmed_at
+kevin            appid PK, owned (bool), never (bool), note, updated_at
+settings         key PK, value_json           (weights, gates, tag set, region, admin token hash)
+run_log          id PK, stage, started_at, finished_at, ok, count, error
+api_budget       month PK, used, remaining, reserve, last_header_at
+```
+
+## 5. Alerts
+
+None. Decided Sep 9: no Discord, no email. The On sale and Upcoming pages are the alert.
+
+## 6. What is not in v0.1
+
+- Regions other than US (Free plan allows 2; the second slot stays empty until asked for).
+- Trophy data (PlatPrices returns it; nothing in the taste schema uses it).
+- Xbox, Switch, PC prices.
+- Any account system. One admin token, no users.
+- Automatic article googling. The corpus is Steam, PS Store, and two RSS feeds.
+
+## 7. Decisions (closed Sep 9)
+
+1. Repo `survivors`, served from the worker's `*.workers.dev` URL. No separate site name.
+2. No alerts. Kevin does not use Discord; the site is checked, not pushed.
+3. PS4 titles are in when they run on PS5. PlatPrices reports `IsPS4`/`IsPS5`; the Game page shows both.
+4. Tag set: Bullet Heaven only to start. The secondary Roguelite rule from 2.1 is not built; instead Settings has an "extra appids" list for stragglers, and Discover accepts any tag Kevin adds later.
+5. Queue threshold 70.
+
+## 8. Build order
+
+1. Repo skeleton, D1 schema, worker with `/api/health` and one cron stage (discover). Deploy and prove the cron fires.
+2. Steam enrich + PSN match + Queue page. Kevin confirms the first 20 matches by hand; that's the acceptance test for the matcher.
+3. Price refresh + budget guard + On sale page.
+4. Facet tagging + Browse page + Settings sliders.
+5. Upcoming page (trivial once 2 and 3 exist), Game page, Discord if wanted.
+
+Each step ships as its own zip with only the files changed since the last one.

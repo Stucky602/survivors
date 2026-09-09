@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "gates": {
+    "auto_fire":   { "type": "bool", "must": true },
+    "perspective": { "type": "enum", "values": ["top_down", "isometric", "side_2d", "third_person", "first_person"], "reject": ["first_person"] },
+    "idle_game":   { "type": "bool", "must": false },
+    "horde":       { "type": "int", "min": 0, "max": 10, "at_least": 4 }
+  },
+  "weighted": {
+    "combat_purity":     { "type": "int", "min": 0, "max": 10, "judged": true },
+    "progression_depth": { "type": "int", "min": 0, "max": 10, "judged": true },
+    "quality":           { "type": "int", "min": 0, "max": 10, "judged": false, "computed": "quality" },
+    "content_longevity": { "type": "int", "min": 0, "max": 10, "judged": true },
+    "build_variety":     { "type": "int", "min": 0, "max": 10, "judged": true },
+    "hub":               { "type": "int", "min": 0, "max": 10, "judged": true },
+    "session_fit":       { "type": "int", "min": 0, "max": 10, "judged": true },
+    "originality":       { "type": "int", "min": 0, "max": 10, "judged": true },
+    "presentation":      { "type": "int", "min": 0, "max": 10, "judged": true }
+  },
+  "filters": {
+    "hub_type":     { "type": "enum", "values": ["none", "decorative", "authored", "freeform"] },
+    "combat_class": { "type": "enum", "values": ["pure_bullet_heaven", "survivor_hybrid", "action_roguelite", "traditional_roguelike", "idle"] },
+    "meta_systems": { "type": "list", "values": ["characters", "classes", "weapons", "weapon_evolutions", "abilities", "skill_trees", "equipment", "loot", "relics", "crafting", "research", "meta_currencies", "permanent_upgrades", "npc_unlocks", "hub_upgrades", "difficulty_tiers", "challenges", "rewarded_achievements", "prestige", "ng_plus", "endgame", "secrets"] },
+    "prestige":     { "type": "bool", "derived": "meta_systems includes prestige or ng_plus" },
+    "run_length_minutes": { "type": "int", "nullable": true },
+    "coop":         { "type": "enum", "values": ["none", "local", "online", "both"] },
+    "counts":       { "type": "object", "keys": ["characters", "weapons", "maps", "bosses"], "nullable_values": true, "rule": "only when stated in the corpus" }
+  },
+  "evidence": {
+    "required_for": ["auto_fire", "perspective", "idle_game", "horde", "combat_purity", "progression_depth", "content_longevity", "build_variety", "hub", "hub_type", "combat_class", "session_fit", "originality", "presentation"],
+    "max_chars": 400
+  },
+  "model_output_extra": {
+    "fit_summary":     { "type": "string", "max_chars": 300 },
+    "why_not_perfect": { "type": "string", "max_chars": 300 },
+    "confidence":      { "type": "float", "min": 0, "max": 1 }
+  }
+}

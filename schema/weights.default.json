@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "weights": {
+    "combat_purity": 25,
+    "progression_depth": 20,
+    "quality": 15,
+    "content_longevity": 10,
+    "build_variety": 10,
+    "hub": 8,
+    "session_fit": 5,
+    "originality": 4,
+    "presentation": 3
+  },
+  "penalties": {
+    "hub_freeform": -25,
+    "shallow_progression": -20,
+    "shallow_progression_threshold": 3
+  },
+  "gates": {
+    "auto_fire": true,
+    "reject_first_person": true,
+    "reject_idle": true,
+    "horde_min": 4
+  },
+  "queue_threshold": 70,
+  "wildcard_max_reviews": 50,
+  "region": "US"
+}

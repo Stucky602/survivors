@@ -1,0 +1,112 @@
+import React, { useEffect, useState } from 'react';
+import { api, getToken, setToken, getLocalTaste, setLocalTaste } from '../api.js';
+import { DEFAULT_SETTINGS, DEFAULT_WEIGHTS } from '../../shared/score.js';
+
+export default function Settings({ meta, onChange }) {
+  const [token, setTok] = useState(getToken());
+  const [ok, setOk] = useState(null);
+  const [s, setS] = useState(null);
+  const [err, setErr] = useState('');
+  const [msg, setMsg] = useState('');
+  const [tagName, setTagName] = useState('Bullet Heaven');
+  const [budget, setBudget] = useState(null);
+
+  const load = () => api('/admin/settings', { admin: true }).then((d) => { setS(d); setOk(true); }).catch((e) => { setOk(false); setErr(e.message); });
+  useEffect(() => { if (getToken()) load(); }, []);
+
+  const saveToken = () => { setToken(token.trim()); setErr(''); load(); };
+  const setW = (k, v) => setS({ ...s, taste: { ...s.taste, weights: { ...s.taste.weights, [k]: Number(v) } } });
+  const wsum = s ? Object.values(s.taste.weights).reduce((a, b) => a + Number(b || 0), 0) : 0;
+
+  const saveTaste = async (rescore) => {
+    setMsg('');
+    try {
+      await api('/admin/settings', { method: 'PUT', admin: true, body: { taste: s.taste, steam_tags: s.steam_tags, extra_appids: s.extra_appids } });
+      setLocalTaste(null);
+      if (rescore) { const r = await api('/admin/run/rescore', { method: 'POST', admin: true, body: {} }); setMsg(`Saved. Rescored ${r.count} games.`); } else setMsg('Saved.');
+      onChange && onChange();
+    } catch (e) { setErr(e.message); }
+  };
+  const previewLocally = () => { setLocalTaste(s.taste); setMsg('Browse now uses these weights on this device only. Save to make them the site\'s weights.'); };
+  const resolveTag = async () => {
+    setMsg('');
+    try {
+      const r = await api('/admin/resolve-tag', { method: 'POST', admin: true, body: { name: tagName } });
+      if (r.id) setS({ ...s, steam_tags: [...s.steam_tags.filter((t) => t.name !== tagName), { name: tagName, id: r.id }] });
+      else setMsg(r.note);
+    } catch (e) { setErr(e.message); }
+  };
+  const checkBudget = () => api('/admin/budget', { admin: true }).then(setBudget).catch((e) => setErr(e.message));
+
+  return (
+    <>
+      <h1>Settings</h1>
+      <h2>Admin token</h2>
+      <p className="muted">The ADMIN_TOKEN secret on the worker. Stored in this browser only.</p>
+      <div className="actions">
+        <input type="password" value={token} onChange={(e) => setTok(e.target.value)} placeholder="token" />
+        <button onClick={saveToken}>Use this token</button>
+        {ok === true && <span className="sale">accepted</span>}
+        {ok === false && <span className="warn-text">{err || 'rejected'}</span>}
+      </div>
+
+      {s && (
+        <>
+          <h2>Weights</h2>
+          <p className="muted">Sum is {wsum}. 100 keeps scores on a 0 to 100 scale; anything else still works, it just shifts the range.</p>
+          <table className="plain weights">
+            <tbody>
+              {Object.keys(DEFAULT_WEIGHTS).map((k) => (
+                <tr key={k}>
+                  <td>{k.replace(/_/g, ' ')}</td>
+                  <td><input type="range" min="0" max="40" value={s.taste.weights[k] ?? 0} onChange={(e) => setW(k, e.target.value)} /></td>
+                  <td className="num"><input type="number" min="0" max="100" value={s.taste.weights[k] ?? 0} onChange={(e) => setW(k, e.target.value)} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <h3>Gates and penalties</h3>
+          <div className="filters">
+            <label className="check"><input type="checkbox" checked={!!s.taste.gates.auto_fire} onChange={(e) => setS({ ...s, taste: { ...s.taste, gates: { ...s.taste.gates, auto_fire: e.target.checked } } })} /> Require auto-fire</label>
+            <label className="check"><input type="checkbox" checked={!!s.taste.gates.reject_first_person} onChange={(e) => setS({ ...s, taste: { ...s.taste, gates: { ...s.taste.gates, reject_first_person: e.target.checked } } })} /> Reject first-person</label>
+            <label className="check"><input type="checkbox" checked={!!s.taste.gates.reject_idle} onChange={(e) => setS({ ...s, taste: { ...s.taste, gates: { ...s.taste.gates, reject_idle: e.target.checked } } })} /> Reject idle games</label>
+            <label>Horde minimum <input type="number" min="0" max="10" value={s.taste.gates.horde_min} onChange={(e) => setS({ ...s, taste: { ...s.taste, gates: { ...s.taste.gates, horde_min: Number(e.target.value) } } })} /></label>
+            <label>Freeform hub penalty <input type="number" max="0" value={s.taste.penalties.hub_freeform} onChange={(e) => setS({ ...s, taste: { ...s.taste, penalties: { ...s.taste.penalties, hub_freeform: Number(e.target.value) } } })} /></label>
+            <label>Shallow progression penalty <input type="number" max="0" value={s.taste.penalties.shallow_progression} onChange={(e) => setS({ ...s, taste: { ...s.taste, penalties: { ...s.taste.penalties, shallow_progression: Number(e.target.value) } } })} /></label>
+            <label>Queue threshold <input type="number" min="0" max="100" value={s.taste.queue_threshold} onChange={(e) => setS({ ...s, taste: { ...s.taste, queue_threshold: Number(e.target.value) } })} /></label>
+            <label>Wildcard below reviews <input type="number" min="0" value={s.taste.wildcard_max_reviews} onChange={(e) => setS({ ...s, taste: { ...s.taste, wildcard_max_reviews: Number(e.target.value) } })} /></label>
+          </div>
+          <div className="actions">
+            <button onClick={previewLocally}>Preview in Browse</button>
+            <button className="primary" onClick={() => saveTaste(true)}>Save and rescore</button>
+            <button onClick={() => setS({ ...s, taste: DEFAULT_SETTINGS })}>Reset to defaults</button>
+          </div>
+
+          <h2>Steam tags to track</h2>
+          <p className="muted">Discover walks the store search for each tag. Bullet Heaven is Valve's official tag for the genre since May 2026.</p>
+          <ul className="list">
+            {s.steam_tags.map((t) => <li key={t.name}>{t.name} <span className="muted">id {t.id}</span> <button onClick={() => setS({ ...s, steam_tags: s.steam_tags.filter((x) => x.name !== t.name) })}>Remove</button></li>)}
+            {s.steam_tags.length === 0 && <li className="muted">None yet. Resolve Bullet Heaven below.</li>}
+          </ul>
+          <div className="actions">
+            <input type="text" value={tagName} onChange={(e) => setTagName(e.target.value)} placeholder="Tag name as shown on Steam" />
+            <button onClick={resolveTag}>Look up id</button>
+            <input type="number" placeholder="or paste id" onBlur={(e) => { const id = Number(e.target.value); if (id) { setS({ ...s, steam_tags: [...s.steam_tags.filter((t) => t.name !== tagName), { name: tagName, id }] }); e.target.value = ''; } }} />
+          </div>
+          <h3>Extra Steam appids</h3>
+          <p className="muted">Games the tag search misses. One appid per line.</p>
+          <textarea rows="3" value={s.extra_appids.join('\n')} onChange={(e) => setS({ ...s, extra_appids: e.target.value.split(/\s+/).filter(Boolean) })} />
+          <div className="actions"><button className="primary" onClick={() => saveTaste(false)}>Save tags and appids</button></div>
+
+          <h2>PlatPrices budget</h2>
+          <p className="muted">Free plan: 1,000 requests a month. The worker keeps 150 in reserve and stops refreshing prices when it would dip below that.</p>
+          {meta && meta.budget && <p>Seen from headers: used {meta.budget.used}, remaining {meta.budget.remaining ?? 'unknown'}, reserve {meta.budget.reserve}. Month {meta.budget.month}.</p>}
+          <div className="actions"><button onClick={checkBudget}>Check live (costs nothing)</button></div>
+          {budget && <pre className="log">{JSON.stringify(budget.remote, null, 2)}</pre>}
+        </>
+      )}
+      {msg && <p className="bar">{msg}</p>}
+      {err && ok !== false && <p className="bar warn">{err}</p>}
+    </>
+  );
+}

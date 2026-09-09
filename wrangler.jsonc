@@ -1,0 +1,32 @@
+{
+  // Survivors: one Worker serves the built site, the API, and the cron stages.
+  "name": "survivors",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-09-01",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "survivors",
+      "database_id": "REPLACE_WITH_ID_FROM_wrangler_d1_create",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "ai": { "binding": "AI" },
+  "triggers": {
+    // 09:00 UTC discover + price refresh, 09:30 enrich + match + tag, 21:00 retry pass
+    "crons": ["0 9 * * *", "30 9 * * *", "0 21 * * *"]
+  },
+  "vars": {
+    "REGION": "US",
+    "AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "BATCH_LIMIT": "25"
+  },
+  "observability": { "enabled": true }
+  // Secrets, set with `wrangler secret put`: PLATPRICES_KEY, ADMIN_TOKEN
+}
