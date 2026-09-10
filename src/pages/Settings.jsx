@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { api, getToken, setToken, getLocalTaste, setLocalTaste } from '../api.js';
+import { api, getToken, setToken, getLocalTaste, setLocalTaste, getPsPlus, setPsPlus } from '../api.js';
 import { DEFAULT_SETTINGS, DEFAULT_WEIGHTS } from '../../shared/score.js';
 
 export default function Settings({ meta, onChange }) {
@@ -10,6 +10,8 @@ export default function Settings({ meta, onChange }) {
   const [msg, setMsg] = useState('');
   const [tagName, setTagName] = useState('Bullet Heaven');
   const [budget, setBudget] = useState(null);
+  const [psplus, setPs] = useState(getPsPlus());
+  const [cal, setCal] = useState(null);
 
   const load = () => api('/admin/settings', { admin: true }).then((d) => { setS(d); setOk(true); }).catch((e) => { setOk(false); setErr(e.message); });
   useEffect(() => { if (getToken()) load(); }, []);
@@ -37,6 +39,7 @@ export default function Settings({ meta, onChange }) {
     } catch (e) { setErr(e.message); }
   };
   const checkBudget = () => api('/admin/budget', { admin: true }).then(setBudget).catch((e) => setErr(e.message));
+  const loadCal = () => api('/admin/calibration', { admin: true }).then(setCal).catch((e) => setErr(e.message));
 
   return (
     <>
@@ -97,6 +100,24 @@ export default function Settings({ meta, onChange }) {
           <p className="muted">Games the tag search misses. One appid per line.</p>
           <textarea rows="3" value={s.extra_appids.join('\n')} onChange={(e) => setS({ ...s, extra_appids: e.target.value.split(/\s+/).filter(Boolean) })} />
           <div className="actions"><button className="primary" onClick={() => saveTaste(false)}>Save tags and appids</button></div>
+
+          <h2>PS Plus</h2>
+          <p className="muted">Which catalog you pay for. Games in it get a PS Plus mark and a filter in Browse. Stored in this browser only.</p>
+          <div className="actions">
+            {['none', 'extra', 'premium'].map((t) => <button key={t} className={psplus === t ? 'on' : ''} onClick={() => { setPsPlus(t); setPs(t); }}>{t === 'none' ? 'No PS Plus catalog' : t === 'extra' ? 'Extra' : 'Premium'}</button>)}
+          </div>
+
+          <h2>Calibration</h2>
+          <p className="muted">Does the score predict what you actually liked? Mark owned games loved, fine, or bounced on their page, then check here. A loved game under 60 or a bounced game over 80 means a weight or a facet is wrong.</p>
+          <div className="actions"><button onClick={loadCal}>Check calibration</button></div>
+          {cal && (cal.rows.length === 0 ? <p className="empty">No verdicts yet.</p> : (
+            <>
+              <p>{['loved', 'fine', 'bounced'].map((v) => { const rs = cal.rows.filter((r) => r.verdict === v && r.score != null); return rs.length ? `${v}: avg ${Math.round(rs.reduce((a, r) => a + r.score, 0) / rs.length)} over ${rs.length}` : `${v}: none`; }).join(', ')}</p>
+              <table className="plain">
+                <tbody>{cal.rows.map((r) => { const miss = (r.verdict === 'loved' && r.score != null && r.score < 60) || (r.verdict === 'bounced' && r.score != null && r.score >= 80); return <tr key={r.appid} className={miss ? 'bad' : ''}><td><a href={`#/game/${r.appid}`}>{r.name}</a></td><td>{r.verdict}</td><td className="num">{r.score ?? '–'}</td><td className="muted">{miss ? 'misfire' : ''}</td></tr>; })}</tbody>
+              </table>
+            </>
+          ))}
 
           <h2>PlatPrices budget</h2>
           <p className="muted">Free plan: 1,000 requests a month. The worker keeps 150 in reserve and stops refreshing prices when it would dip below that.</p>

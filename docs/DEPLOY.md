@@ -1,61 +1,57 @@
-# First-time deploy
+# Deploy (browser only)
 
-Run these once from a PC with Node 18+ and the repo checked out. After this, every push to `main` deploys through Cloudflare's GitHub integration.
+Everything is done in the GitHub and Cloudflare dashboards. No terminal.
 
-## 1. PlatPrices key
+## Already done (Sep 9)
 
-Apply at https://platprices.com/api-request, Free plan. Describe the project as a public survivors-like genre tracker for the PlayStation Store with a taste filter, attribution shown on every page with a price. Keys arrive by email in 1 to 2 business days. Region defaults to US, which is what the worker uses.
+- D1 database `survivors` created; its id is in `wrangler.jsonc`.
+- Tables created from `migrations/0001_init.sql` via the D1 console.
+- Worker `survivors` connected to the GitHub repo. Deploy command: `npm run build && npx wrangler deploy`.
+- `workers_dev: true` in `wrangler.jsonc`, so the site is at `survivors.<subdomain>.workers.dev`.
 
-## 2. Cloudflare resources
+## Each new migration
 
-```
-npx wrangler login
-npx wrangler d1 create survivors
-```
+When a zip adds a file under `migrations/`, run its statements in the D1 console (Cloudflare → Storage & Databases → D1 → survivors → Console). Paste the file's contents as one block, Execute, then `/tables` or a `SELECT` to confirm. Keep comments out of what you paste; the console reads `--` to end of line and breaks on the next statement.
 
-Copy the `database_id` it prints into `wrangler.jsonc` (replace `REPLACE_WITH_ID_FROM_wrangler_d1_create`). Then:
-
-```
-npx wrangler d1 migrations apply survivors --remote
-npx wrangler secret put PLATPRICES_KEY      # paste the key
-npx wrangler secret put ADMIN_TOKEN         # any long random string; you type it once into Settings
-```
-
-## 3. First deploy
+For v0.2, paste this:
 
 ```
-npm install
-npm test
-npm run deploy
+ALTER TABLE kevin ADD COLUMN want INTEGER DEFAULT 0; ALTER TABLE kevin ADD COLUMN want_price INTEGER; ALTER TABLE kevin ADD COLUMN want_at TEXT; ALTER TABLE kevin ADD COLUMN verdict TEXT; ALTER TABLE games ADD COLUMN matched_at TEXT;
 ```
 
-Wrangler prints the `*.workers.dev` URL. That is the site.
+Run it before pushing the v0.2 code. The worker reads those columns on every page.
 
-## 4. Connect GitHub so pushes deploy
+For v0.4, paste this:
 
-Cloudflare dashboard, Workers & Pages, the `survivors` worker, Settings, Build. Connect the GitHub repo, branch `main`, build command `npm run build`, deploy command `npx wrangler deploy`. The D1 id and cron schedules come from `wrangler.jsonc` in the repo, so nothing else lives in the dashboard.
+```
+ALTER TABLE games ADD COLUMN error_count INTEGER DEFAULT 0;
+```
 
-## 5. Seed the catalog
+## Secrets
+
+Worker → Settings → Variables and Secrets. Two secrets:
+
+- `ADMIN_TOKEN`: any long random string. You type it once into the site's Settings page.
+- `PLATPRICES_KEY`: from platprices.com/api-request, Free plan. Say yes to attribution; the site shows "Powered by PlatPrices" in the footer and on every price.
+
+The site runs without `PLATPRICES_KEY`; only the match, refresh, and attach steps need it.
+
+## Seeding the catalog
 
 On the site:
 
 1. Settings, paste the admin token, "Use this token".
-2. Settings, Steam tags, "Look up id" for Bullet Heaven. If Steam's tag page shape defeats the parser, open https://store.steampowered.com/tags/en/Bullet%20Heaven/ in a browser, click through to a search, and paste the number after `tags=` in the URL. Save.
-3. Queue, run `discover`. It walks the tag search and inserts every appid (several hundred).
-4. Queue, `enrich` with "run until empty". Each batch is 25 games and hits Steam three times per game. Expect a few minutes.
-5. Queue, `match` with "run until empty". This spends PlatPrices requests: one per game. Watch the budget line in Settings. With 400 to 600 candidates the first month's quota is mostly the initial match; that is expected and the reserve guard stops it before the last 150.
-6. Queue, `tag` with "run until empty". Workers AI, free allocation; if it starts returning errors you have hit the daily cap, come back tomorrow.
-7. Queue, `refresh` once. Prices are now live. Cron takes over from here.
+2. Settings, Steam tags, "Look up id" for Bullet Heaven. If the lookup fails, open store.steampowered.com/tags/en/Bullet%20Heaven/ in a browser, click into a search, and paste the number after `tags=` from the URL.
+3. Queue, run `discover`. Several hundred appids land.
+4. Queue, `enrich` with the ↻ button (run until empty). Steam only, no key needed.
+5. Queue, `match` with ↻. Needs the PlatPrices key. One request per game; the budget guard stops at 150 remaining.
+6. Queue, `tag` with ↻. Workers AI, free allocation. If it errors, the daily cap is hit; come back tomorrow.
+7. Queue, `refresh` once. Prices live. Cron takes over: 09:00 UTC discover + refresh, 09:30 and 21:00 enrich + match + tag.
 
-## Cron schedule (UTC)
+## When something is wrong
 
-- 09:00 discover, refresh
-- 09:30 enrich, match, tag (one batch each)
-- 21:00 enrich, match, tag again (catches failures)
-
-## Where things can break
-
-- Steam changes its search HTML: `discover` returns 0 with no error. Fix `parseSearchHtml` in `worker/lib/steam.js`; `tests/parse.test.mjs` has the shape.
-- Steam changes its tag-vote embed: tag votes go null, nothing else breaks.
-- PlatPrices returns `429`: budget guard. Check Settings, wait for the 1st.
-- Workers AI returns text that is not JSON: the game gets `last_error` starting with `tag:` and shows in Queue under Errors. Rerun `tag`; it retries anything without facets.
+- Build fails with `CommaExpected` or similar: `wrangler.jsonc` has a syntax slip. Every entry except the last needs a trailing comma.
+- Build fails with `assets.directory does not exist`: the deploy command lost its `npm run build &&` prefix.
+- Site loads but `/api/health` errors: the D1 binding name is not `DB` or the AI binding is not `AI`. Check Worker → Settings → Bindings.
+- `discover` returns 0 with no error: Steam changed its search HTML. `worker/lib/steam.js` `parseSearchHtml` needs a new pattern.
+- Home shows "Can't reach the worker": the deploy is mid-flight or failed; check the build log.

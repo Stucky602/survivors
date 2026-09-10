@@ -3,10 +3,18 @@
 const UA = 'survivors-tracker/0.1 (personal PSN genre tracker)';
 const COOKIE = 'birthtime=568022401; wants_mature_content=1; lastagecheckage=1-January-1988';
 
+const TIMEOUT_MS = 12000;
+export const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+
 async function getText(url, init = {}) {
-  const res = await fetch(url, { ...init, headers: { 'User-Agent': UA, 'Accept-Language': 'en-US,en;q=0.8', Cookie: COOKIE, ...(init.headers || {}) } });
-  if (!res.ok) throw new Error(`steam ${res.status} ${url}`);
-  return res.text();
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort('timeout'), TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { ...init, signal: ctl.signal, headers: { 'User-Agent': UA, 'Accept-Language': 'en-US,en;q=0.8', Cookie: COOKIE, ...(init.headers || {}) } });
+    if (res.status === 429 || res.status === 403) throw new Error(`steam rate-limited (${res.status})`);
+    if (!res.ok) throw new Error(`steam ${res.status} ${url}`);
+    return await res.text();
+  } finally { clearTimeout(timer); }
 }
 async function getJSON(url) {
   const t = await getText(url);

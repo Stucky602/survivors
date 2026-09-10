@@ -2,13 +2,19 @@
 
 export async function runJSON(env, { system, user, maxTokens = 1200 }) {
   const model = env.AI_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
-  const res = await env.AI.run(model, {
-    messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
-    max_tokens: maxTokens,
-    temperature: 0.1
-  });
-  const text = typeof res === 'string' ? res : (res && (res.response || res.result || '')) || '';
-  return { model, text, json: extractJSON(text) };
+  let last = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await env.AI.run(model, {
+      messages: [{ role: 'system', content: system }, { role: 'user', content: attempt ? `${user}\n\nReply with the JSON object only.` : user }],
+      max_tokens: maxTokens,
+      temperature: attempt ? 0 : 0.1
+    });
+    const text = typeof res === 'string' ? res : (res && (res.response || res.result || '')) || '';
+    const json = extractJSON(text);
+    last = { model, text, json };
+    if (json) return last;
+  }
+  return last;
 }
 
 // Pull the first balanced {...} out of model text, tolerating code fences and preambles.

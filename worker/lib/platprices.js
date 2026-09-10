@@ -17,7 +17,11 @@ async function call(env, path, params = {}) {
   const url = new URL(BASE + path);
   url.searchParams.set('region', (env.REGION || 'US').toLowerCase());
   for (const [k, v] of Object.entries(params)) if (v != null) url.searchParams.set(k, String(v));
-  const res = await fetch(url, { headers: { 'X-API-Key': env.PLATPRICES_KEY, Accept: 'application/json' } });
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort('timeout'), 15000);
+  let res;
+  try { res = await fetch(url, { signal: ctl.signal, headers: { 'X-API-Key': env.PLATPRICES_KEY, Accept: 'application/json' } }); }
+  finally { clearTimeout(timer); }
   await noteBudgetHeaders(env.DB, res.headers);
   const j = await res.json().catch(() => null);
   if (!j || j.success !== true) {
@@ -79,4 +83,8 @@ export async function upsertProduct(db, row, observedAt) {
       .bind(row.ppid, observedAt, row.base_price, row.sale_price, row.plus_price).run();
   }
   return changed;
+}
+
+export async function markDelisted(db, ppids, observedAt) {
+  for (const ppid of ppids) await db.prepare('UPDATE psn_products SET is_delisted = 1, is_on_sale = 0, refreshed_at = ? WHERE ppid = ?').bind(observedAt, ppid).run();
 }

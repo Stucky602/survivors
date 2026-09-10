@@ -1,5 +1,3 @@
--- Survivors D1 schema v1
-
 CREATE TABLE IF NOT EXISTS games (
   appid INTEGER PRIMARY KEY,
   name TEXT NOT NULL,
@@ -9,8 +7,8 @@ CREATE TABLE IF NOT EXISTS games (
   publisher TEXT,
   header_img TEXT,
   early_access INTEGER DEFAULT 0,
-  status TEXT NOT NULL DEFAULT 'new',        -- new | enriched | excluded | error
-  psn_status TEXT NOT NULL DEFAULT 'unmatched', -- unmatched | matched | not_listed | review
+  status TEXT NOT NULL DEFAULT 'new',
+  psn_status TEXT NOT NULL DEFAULT 'unmatched',
   ppid INTEGER,
   concept_id INTEGER,
   tag_votes INTEGER,

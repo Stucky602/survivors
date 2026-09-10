@@ -28,6 +28,6 @@
     "BATCH_LIMIT": "25"
   },
   "observability": { "enabled": true },
-  // Secrets, set with `wrangler secret put`: PLATPRICES_KEY, ADMIN_TOKEN
-"workers_dev": true,
+  "workers_dev": true
+  // Secrets, set in the dashboard under Variables and Secrets: PLATPRICES_KEY, ADMIN_TOKEN
 }

@@ -138,3 +138,30 @@ export function normalizeEvidence(raw) {
   for (const [k, v] of Object.entries(r)) if (typeof v === 'string') out[k] = v.slice(0, 400);
   return out;
 }
+
+// Per-facet contribution to the score, for the "why this number" view. Same math as scoreGame.
+export function scoreBreakdown(facets, settings = DEFAULT_SETTINGS) {
+  const s = { ...DEFAULT_SETTINGS, ...settings };
+  const weights = { ...DEFAULT_WEIGHTS, ...(s.weights || {}) };
+  const f = facets || {};
+  const rows = Object.entries(weights).map(([k, w]) => ({ facet: k, value: clamp(num(f[k], 0), 0, 10), weight: num(w), points: (clamp(num(f[k], 0), 0, 10) * num(w)) / 10 }));
+  return rows.sort((a, b) => b.weight - a.weight);
+}
+
+// Deal verdict from what the site and PlatPrices have seen. Plain words, no scores.
+export function dealVerdict(p) {
+  if (!p || p.is_delisted) return null;
+  if (p.is_preorder) return { kind: 'preorder', text: 'Preorder' };
+  if (!p.is_on_sale) return { kind: 'full', text: 'Full price' };
+  const cur = p.sale_price;
+  const seen = p.lowest_seen, ever = p.lowest_ever;
+  if (ever != null && cur <= ever) return { kind: 'best', text: 'Lowest ever recorded' };
+  if (seen != null && cur <= seen) return { kind: 'best', text: 'Lowest this site has seen' };
+  if (ever != null && cur > ever) {
+    const gap = Math.round(((cur - ever) / cur) * 100);
+    return { kind: gap >= 20 ? 'wait' : 'near', text: gap >= 20 ? `Has been ${gap}% cheaper` : `Within ${gap}% of the lowest ever` };
+  }
+  return { kind: 'sale', text: `${p.disc_perc}% off` };
+}
+
+export const VERDICTS = ['loved', 'fine', 'bounced'];

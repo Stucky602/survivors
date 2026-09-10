@@ -70,3 +70,19 @@ assert.equal(n.auto_fire, false);
 assert.equal(normalizeFacets(null).combat_class, 'pure_bullet_heaven');
 
 console.log('score.test: ok');
+
+// v0.2: breakdown and deal verdicts
+import { scoreBreakdown, dealVerdict } from '../shared/score.js';
+const bd = scoreBreakdown(ideal);
+assert.equal(bd.reduce((a, r) => a + r.points, 0), 100);
+assert.equal(bd[0].facet, 'combat_purity');
+assert.equal(scoreBreakdown({ ...ideal, hub: 5 }).find((r) => r.facet === 'hub').points, 4);
+assert.equal(dealVerdict(null), null);
+assert.equal(dealVerdict({ is_on_sale: 0 }).kind, 'full');
+assert.equal(dealVerdict({ is_preorder: 1 }).kind, 'preorder');
+assert.equal(dealVerdict({ is_on_sale: 1, sale_price: 499, lowest_ever: 499, disc_perc: 50 }).kind, 'best');
+assert.equal(dealVerdict({ is_on_sale: 1, sale_price: 499, lowest_seen: 499, lowest_ever: null, disc_perc: 50 }).kind, 'best');
+assert.equal(dealVerdict({ is_on_sale: 1, sale_price: 999, lowest_ever: 499, disc_perc: 50 }).kind, 'wait');
+assert.equal(dealVerdict({ is_on_sale: 1, sale_price: 549, lowest_ever: 499, disc_perc: 50 }).kind, 'near');
+assert.equal(dealVerdict({ is_on_sale: 1, sale_price: 999, lowest_ever: null, lowest_seen: null, disc_perc: 30 }).text, '30% off');
+console.log('score.test v0.2: ok');

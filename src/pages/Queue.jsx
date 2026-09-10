@@ -73,14 +73,14 @@ export default function Queue({ meta, onChange }) {
           {q.matches.length === 0 && <p className="empty">No matches waiting.</p>}
           {q.matches.map((mrow) => (
             <div key={mrow.appid} className="queue-item">
-              <p><b>{mrow.name}</b> <span className="muted">{mrow.developer} · Steam {mrow.steam_release}</span></p>
+              <p><b>{mrow.name}</b> <span className="muted">{mrow.developer}, Steam {mrow.steam_release}</span></p>
               <p className="muted">Model picked {mrow.ai.ppid ?? 'nothing'} at {mrow.ai.confidence ?? '?'}: {mrow.ai.reason}</p>
               <table className="plain">
                 <tbody>
                   {mrow.candidates.slice(0, 12).map((c) => (
                     <tr key={c.PPID} className={Number(c.PPID) === Number(mrow.ai.ppid) ? 'pick' : ''}>
                       <td>{c.ProductName}{c.EditionName ? ` (${c.EditionName})` : ''}</td>
-                      <td className="muted">{c.Publisher} · {c.ReleaseDate} · {c.StoreClass}</td>
+                      <td className="muted">{c.Publisher}, {c.ReleaseDate}, {c.StoreClass}</td>
                       <td className="num">{c.formattedBasePrice}</td>
                       <td><button onClick={() => confirmMatch(mrow.appid, c.PPID)} disabled={!!busy}>This one</button></td>
                     </tr>

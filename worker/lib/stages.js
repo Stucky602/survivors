@@ -7,6 +7,10 @@ import { MATCH_SYSTEM, matchUser, TAG_SYSTEM, tagUser } from './prompts.js';
 import { computeQuality, scoreGame, categorize, needsReview, normalizeFacets, normalizeEvidence, DEFAULT_SETTINGS } from '../../shared/score.js';
 
 const limitOf = (env, override) => Math.max(1, Math.min(200, Number(override) || Number(env.BATCH_LIMIT) || 25));
+// A stage stops taking new items after this long so a slow upstream never runs a cron tick into the wall.
+const TIME_BUDGET_MS = 40000;
+const budgetClock = () => { const t0 = Date.now(); return () => Date.now() - t0 > TIME_BUDGET_MS; };
+const MAX_ERRORS = 5;
 
 async function withRun(db, stage, fn) {
   const id = await startRun(db, stage);
@@ -32,11 +36,13 @@ export async function discover(env, opts = {}) {
       for (let page = 0; page < maxPages; page++) {
         const { items, total } = await steam.searchByTag(t.id, page * 50, 50);
         seen += items.length;
+        await steam.pause(250);
         for (const it of items) if (await upsertGameFromSteamSearch(env.DB, { ...it, source: `tag:${t.name}` })) added++;
         if (items.length < 50 || (page + 1) * 50 >= total) break;
       }
     }
     for (const appid of extra) if (await upsertGameFromSteamSearch(env.DB, { appid: Number(appid), name: `app ${appid}`, source: 'manual' })) added++;
+    if (tags.length && seen === 0) throw new Error('Steam search returned no items for any tag; the search HTML may have changed');
     return { count: added, note: `seen ${seen}` };
   });
 }
@@ -46,11 +52,13 @@ export async function enrich(env, opts = {}) {
   return withRun(env.DB, 'enrich', async () => {
     const limit = limitOf(env, opts.limit);
     const { results } = await env.DB.prepare(
-      `SELECT appid FROM games WHERE status IN ('new','error') OR (status = 'enriched' AND (last_enriched IS NULL OR last_enriched < ?))
+      `SELECT appid FROM games WHERE (status = 'new' OR (status = 'error' AND COALESCE(error_count,0) < ${MAX_ERRORS} AND (last_enriched IS NULL OR last_enriched < ?)) OR (status = 'enriched' AND (last_enriched IS NULL OR last_enriched < ?)))
        ORDER BY CASE status WHEN 'new' THEN 0 WHEN 'error' THEN 1 ELSE 2 END, last_enriched LIMIT ?`
-    ).bind(daysFromNow(-7), limit).all();
+    ).bind(daysFromNow(-1), daysFromNow(-7), limit).all();
     let n = 0;
+    const over = budgetClock();
     for (const { appid } of results) {
+      if (over()) break;
       try {
         const d = await steam.appDetails(appid);
         if (!d) { await env.DB.prepare(`UPDATE games SET status = 'excluded', last_error = 'appdetails empty', last_enriched = ? WHERE appid = ?`).bind(now(), appid).run(); continue; }
@@ -63,7 +71,7 @@ export async function enrich(env, opts = {}) {
         const tagVotes = tv ? (tv.find((t) => /bullet heaven/i.test(t.name))?.count ?? 0) : null;
         await env.DB.prepare(
           `UPDATE games SET name = ?, steam_release = ?, coming_soon = ?, developer = ?, publisher = ?, header_img = ?, early_access = ?,
-             status = 'enriched', tag_votes = ?, steam_pos = ?, steam_neg = ?, steam_score_desc = ?, last_enriched = ?, last_error = NULL WHERE appid = ?`
+             status = 'enriched', tag_votes = ?, steam_pos = ?, steam_neg = ?, steam_score_desc = ?, last_enriched = ?, last_error = NULL, error_count = 0 WHERE appid = ?`
         ).bind(
           d.name || `app ${appid}`, d.release_date?.date || null, d.release_date?.coming_soon ? 1 : 0,
           (d.developers || []).join(', ') || null, (d.publishers || []).join(', ') || null, d.header_image || null, ea,
@@ -80,8 +88,10 @@ export async function enrich(env, opts = {}) {
            ON CONFLICT(appid) DO UPDATE SET appdetails_json = excluded.appdetails_json, appreviews_json = excluded.appreviews_json, tag_votes_json = excluded.tag_votes_json, fetched_at = excluded.fetched_at`
         ).bind(appid, JSON.stringify(slim), reviews ? JSON.stringify(reviews) : null, tv ? JSON.stringify(tv) : null, now()).run();
         n++;
+        await steam.pause(300);
       } catch (e) {
-        await env.DB.prepare(`UPDATE games SET status = 'error', last_error = ?, last_enriched = ? WHERE appid = ?`).bind(String(e.message || e).slice(0, 300), now(), appid).run();
+        await env.DB.prepare(`UPDATE games SET status = 'error', last_error = ?, last_enriched = ?, error_count = COALESCE(error_count,0) + 1 WHERE appid = ?`).bind(String(e.message || e).slice(0, 300), now(), appid).run();
+        if (/rate-limited/.test(String(e.message))) { await steam.pause(5000); }
       }
     }
     return { count: n };
@@ -99,7 +109,9 @@ export async function match(env, opts = {}) {
        ORDER BY g.psn_status = 'unmatched' DESC, g.first_seen LIMIT ?`
     ).bind(now(), limit).all();
     let n = 0, skipped = 0;
+    const over = budgetClock();
     for (const g of results) {
+      if (over()) break;
       if (!(await canSpend(env.DB, 1))) { skipped++; continue; }
       try {
         const cands = (await pp.searchGames(env, g.name)).filter((c) => Number(c.IsDLC) !== 1 && Number(c.IsDemoOrSoundtrack) !== 1);
@@ -132,8 +144,8 @@ export async function match(env, opts = {}) {
 export async function acceptMatch(env, appid, candidate) {
   const row = pp.toProductRow(candidate, appid);
   await pp.upsertProduct(env.DB, row, now());
-  await env.DB.prepare(`UPDATE games SET psn_status = 'matched', ppid = ?, concept_id = ?, next_match_at = NULL, last_error = NULL WHERE appid = ?`)
-    .bind(row.ppid, row.concept_id, appid).run();
+  await env.DB.prepare(`UPDATE games SET psn_status = 'matched', ppid = ?, concept_id = ?, matched_at = COALESCE(matched_at, ?), next_match_at = NULL, last_error = NULL WHERE appid = ?`)
+    .bind(row.ppid, row.concept_id, now(), appid).run();
 }
 
 // 4. Refresh: batch price pull for every matched game, 25 ppids per request.
@@ -149,7 +161,8 @@ export async function refresh(env, opts = {}) {
     const t = now();
     for (let i = 0; i < ppids.length; i += perCall) {
       const chunk = ppids.slice(i, i + perCall);
-      const { data } = await pp.batch(env, chunk);
+      const { data, missing } = await pp.batch(env, chunk);
+      if (missing && missing.length) await pp.markDelisted(env.DB, missing.map(Number).filter((x) => byPpid.has(x)), t);
       for (const g of data) {
         const appid = byPpid.get(Number(g.PPID));
         if (!appid) continue;
@@ -177,7 +190,9 @@ export async function tag(env, opts = {}) {
        ORDER BY g.psn_status = 'matched' DESC, COALESCE(g.steam_pos,0) DESC LIMIT ?`
     ).bind(limit).all();
     let n = 0;
+    const over = budgetClock();
     for (const g of results) {
+      if (over()) break;
       try {
         const d = JSON.parse(g.appdetails_json || '{}');
         const rv = g.appreviews_json ? JSON.parse(g.appreviews_json) : null;

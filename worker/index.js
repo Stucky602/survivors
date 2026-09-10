@@ -3,7 +3,8 @@ import { STAGES, acceptMatch } from './lib/stages.js';
 import { getSetting, setSetting, lastRuns, readBudget, now } from './lib/db.js';
 import { isAdmin } from './lib/auth.js';
 import * as steam from './lib/steam.js';
-import { status as ppStatus } from './lib/platprices.js';
+import { status as ppStatus, batch as ppBatch } from './lib/platprices.js';
+import { canSpend } from './lib/db.js';
 import { DEFAULT_SETTINGS, computeQuality, scoreGame, categorize, normalizeFacets, normalizeEvidence } from '../shared/score.js';
 
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
@@ -16,27 +17,30 @@ const GAME_SELECT = `
          p.base_price, p.sale_price, p.plus_price, p.disc_perc, p.discounted_until, p.f_base, p.f_sale, p.f_plus,
          p.star_rating, p.star_count, p.psp_extra, p.psp_premium, p.lowest_ever, p.lowest_seen, p.release_date AS psn_release, p.refreshed_at,
          f.facets_json, f.evidence_json, f.proposed_json, f.score, f.category, f.confirmed_by, f.needs_review, f.tagged_at, f.model,
-         k.owned, k.never, k.note
+         k.owned, k.never, k.note, k.want, k.want_price, k.want_at, k.verdict, g.matched_at
   FROM games g
   LEFT JOIN psn_products p ON p.ppid = g.ppid
   LEFT JOIN facets f ON f.appid = g.appid
   LEFT JOIN kevin k ON k.appid = g.appid`;
 
+const nowStamp = () => new Date().toISOString().replace('T', ' ').slice(0, 19);
 function rowToGame(r, full = false) {
   const facets = r.facets_json ? JSON.parse(r.facets_json) : null;
+  // A sale past its end date is over, whatever the last refresh said.
+  const saleLive = !!r.is_on_sale && (!r.discounted_until || String(r.discounted_until) >= nowStamp());
   const out = {
     appid: r.appid, name: r.name, steam_release: r.steam_release, coming_soon: !!r.coming_soon, developer: r.developer, publisher: r.publisher,
     header_img: r.header_img, early_access: !!r.early_access, status: r.status, psn_status: r.psn_status, ppid: r.ppid,
     tag_votes: r.tag_votes, steam_pos: r.steam_pos, steam_neg: r.steam_neg, steam_score_desc: r.steam_score_desc,
     psn: r.ppid ? {
       product_name: r.product_name, edition: r.edition, url: r.psn_url, pp_url: r.pp_url, img: r.img, is_ps4: !!r.is_ps4, is_ps5: !!r.is_ps5,
-      is_preorder: !!r.is_preorder, is_delisted: !!r.is_delisted, is_on_sale: !!r.is_on_sale,
+      is_preorder: !!r.is_preorder, is_delisted: !!r.is_delisted, is_on_sale: saleLive, sale_expired: !!r.is_on_sale && !saleLive,
       base_price: r.base_price, sale_price: r.sale_price, plus_price: r.plus_price, disc_perc: r.disc_perc, discounted_until: r.discounted_until,
       f_base: r.f_base, f_sale: r.f_sale, f_plus: r.f_plus, star_rating: r.star_rating, star_count: r.star_count,
       psp_extra: !!r.psp_extra, psp_premium: !!r.psp_premium, lowest_ever: r.lowest_ever, lowest_seen: r.lowest_seen, release_date: r.psn_release, refreshed_at: r.refreshed_at
     } : null,
     facets, score: r.score, category: r.category, confirmed: !!r.confirmed_by, needs_review: !!r.needs_review, tagged_at: r.tagged_at,
-    owned: !!r.owned, never: !!r.never, note: r.note || ''
+    owned: !!r.owned, never: !!r.never, note: r.note || '', want: !!r.want, want_price: r.want_price, want_at: r.want_at, verdict: r.verdict || null, matched_at: r.matched_at
   };
   if (full) {
     out.evidence = r.evidence_json ? JSON.parse(r.evidence_json) : null;
@@ -49,7 +53,7 @@ function rowToGame(r, full = false) {
 async function listGames(env, view) {
   let where = `g.status = 'enriched'`;
   if (view === 'upcoming') where += ` AND (g.psn_status IN ('unmatched','not_listed','review') OR p.is_preorder = 1)`;
-  else if (view === 'sale') where += ` AND p.is_on_sale = 1 AND COALESCE(p.is_delisted,0) = 0`;
+  else if (view === 'sale') where += ` AND p.is_on_sale = 1 AND COALESCE(p.is_delisted,0) = 0 AND (p.discounted_until IS NULL OR p.discounted_until >= '${new Date().toISOString().replace('T', ' ').slice(0, 19)}')`;
   else if (view === 'catalog') where += ` AND g.psn_status = 'matched' AND COALESCE(p.is_delisted,0) = 0`;
   const { results } = await env.DB.prepare(`${GAME_SELECT} WHERE ${where} ORDER BY COALESCE(f.score, -1) DESC, g.name`).all();
   return results.map((r) => rowToGame(r));
@@ -69,18 +73,42 @@ async function handleApi(request, env, ctx) {
     const r = await env.DB.prepare(`${GAME_SELECT} WHERE g.appid = ?`).bind(appid).first();
     if (!r) return bad('not found', 404);
     const snaps = r.ppid ? (await env.DB.prepare('SELECT observed_at, base_price, sale_price, plus_price FROM price_snapshots WHERE ppid = ? ORDER BY observed_at').bind(r.ppid).all()).results : [];
-    const cache = await env.DB.prepare('SELECT appdetails_json, tag_votes_json FROM steam_cache WHERE appid = ?').bind(appid).first();
+    const cache = await env.DB.prepare('SELECT appdetails_json, appreviews_json, tag_votes_json FROM steam_cache WHERE appid = ?').bind(appid).first();
     const d = cache?.appdetails_json ? JSON.parse(cache.appdetails_json) : null;
-    return json({ game: rowToGame(r, true), price_history: snaps, steam: d ? { short_description: d.short_description, genres: d.genres, categories: d.categories, metacritic: d.metacritic } : null, tags: cache?.tag_votes_json ? JSON.parse(cache.tag_votes_json).slice(0, 15) : [] });
+    const rv = cache?.appreviews_json ? JSON.parse(cache.appreviews_json) : null;
+    const reviews = rv ? (rv.reviews || []).slice().sort((a, b) => (b.votes_up || 0) - (a.votes_up || 0)).slice(0, 4).map((x) => ({ voted_up: x.voted_up, hours: x.hours, text: String(x.text || '').slice(0, 600) })) : [];
+    return json({ game: rowToGame(r, true), price_history: snaps, steam: d ? { short_description: d.short_description, about: (d.about || '').slice(0, 1500), genres: d.genres, categories: d.categories, metacritic: d.metacritic } : null, tags: cache?.tag_votes_json ? JSON.parse(cache.tag_votes_json).slice(0, 15) : [], reviews });
   }
 
   if (m === 'GET' && path === '/meta') {
     const taste = { ...DEFAULT_SETTINGS, ...(await getSetting(env.DB, 'taste', {})) };
     const counts = await env.DB.prepare(
-      `SELECT SUM(status='enriched') AS enriched, SUM(status='new') AS pending, SUM(psn_status='matched') AS matched, SUM(psn_status='not_listed') AS not_listed, SUM(psn_status='review') AS review, COUNT(*) AS total FROM games`
+      `SELECT SUM(status='enriched') AS enriched, SUM(status='new') AS pending, SUM(status='error') AS errors, SUM(psn_status='matched') AS matched, SUM(psn_status='not_listed') AS not_listed, SUM(psn_status='review') AS review, COUNT(*) AS total,
+              (SELECT COUNT(*) FROM facets WHERE needs_review = 1) AS facets_review,
+              (SELECT COUNT(*) FROM psn_products WHERE is_on_sale = 1 AND COALESCE(is_delisted,0) = 0 AND (discounted_until IS NULL OR discounted_until >= '${nowStamp()}')) AS on_sale
+       FROM games`
     ).first();
     const lastRefresh = await env.DB.prepare('SELECT MAX(refreshed_at) AS t FROM psn_products').first();
-    return json({ taste, counts, runs: await lastRuns(env.DB), budget: await readBudget(env.DB), last_refresh: lastRefresh?.t || null, region: env.REGION || 'US' });
+    const ageH = lastRefresh?.t ? (Date.now() - Date.parse(lastRefresh.t)) / 36e5 : null;
+    return json({ taste, counts, runs: await lastRuns(env.DB), budget: await readBudget(env.DB), last_refresh: lastRefresh?.t || null, prices_stale: ageH != null && ageH > 48, region: env.REGION || 'US', has_platprices_key: !!env.PLATPRICES_KEY });
+  }
+
+
+  if (m === 'GET' && path === '/home') {
+    const since = url.searchParams.get('since') || new Date(Date.now() - 7 * 864e5).toISOString();
+    const nowTs = new Date().toISOString().replace('T', ' ').slice(0, 19);
+    const in3 = new Date(Date.now() + 3 * 864e5).toISOString().replace('T', ' ').slice(0, 19);
+    const in30 = new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10);
+    const q = async (where, order, limit) => (await env.DB.prepare(`${GAME_SELECT} WHERE g.status = 'enriched' AND ${where} ORDER BY ${order} LIMIT ${limit}`).all()).results.map((r) => rowToGame(r));
+    const ending = await q(`p.is_on_sale = 1 AND COALESCE(p.is_delisted,0) = 0 AND p.discounted_until BETWEEN '${nowTs}' AND '${in3}' AND COALESCE(k.owned,0) = 0`, 'p.discounted_until, COALESCE(f.score,-1) DESC', 20);
+    const live = `(p.discounted_until IS NULL OR p.discounted_until >= '${nowTs}')`;
+    const newSales = await q(`p.is_on_sale = 1 AND ${live} AND COALESCE(p.is_delisted,0) = 0 AND COALESCE(k.owned,0) = 0 AND EXISTS (SELECT 1 FROM price_snapshots s WHERE s.ppid = p.ppid AND s.observed_at > ? AND s.sale_price IS NOT NULL)`.replace('?', `'${since.replace(/'/g, '')}'`), 'COALESCE(f.score,-1) DESC', 30);
+    const newOnPsn = await q(`g.matched_at > '${since.replace(/'/g, '')}' AND COALESCE(k.owned,0) = 0`, 'g.matched_at DESC', 30);
+    const releasing = await q(`p.is_preorder = 1 AND p.release_date <= '${in30}'`, 'p.release_date', 20);
+    const wanted = await q(`k.want = 1`, 'p.is_on_sale DESC, COALESCE(f.score,-1) DESC', 50);
+    const picks = await q(`g.psn_status = 'matched' AND COALESCE(p.is_delisted,0) = 0 AND COALESCE(k.owned,0) = 0 AND COALESCE(k.never,0) = 0 AND f.score IS NOT NULL AND f.category != 'do_not_recommend'`, 'f.score DESC', 8);
+    const drops = await q(`k.want = 1 AND k.want_price IS NOT NULL AND p.sale_price < k.want_price AND ${live}`, 'p.sale_price', 20);
+    return json({ since, ending, newSales, newOnPsn, releasing, wanted, picks, drops });
   }
 
   // Everything below is admin.
@@ -138,11 +166,34 @@ async function handleApi(request, env, ctx) {
   }
 
   if (m === 'POST' && path === '/admin/kevin') {
-    const { appid, owned, never, note } = body;
+    const { appid, owned, never, note, want, verdict } = body;
     if (!appid) return bad('appid required');
-    await env.DB.prepare(`INSERT INTO kevin (appid, owned, never, note, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(appid) DO UPDATE SET owned = excluded.owned, never = excluded.never, note = excluded.note, updated_at = excluded.updated_at`)
-      .bind(appid, owned ? 1 : 0, never ? 1 : 0, note || null, now()).run();
+    const prev = (await env.DB.prepare('SELECT * FROM kevin WHERE appid = ?').bind(appid).first()) || {};
+    const prod = await env.DB.prepare('SELECT p.sale_price FROM games g JOIN psn_products p ON p.ppid = g.ppid WHERE g.appid = ?').bind(appid).first();
+    const wantNow = want == null ? !!prev.want : !!want;
+    const wantPrice = wantNow ? (prev.want && prev.want_price != null ? prev.want_price : (prod?.sale_price ?? null)) : null;
+    const wantAt = wantNow ? (prev.want ? prev.want_at : now()) : null;
+    const v = verdict === undefined ? (prev.verdict || null) : (['loved', 'fine', 'bounced'].includes(verdict) ? verdict : null);
+    await env.DB.prepare(`INSERT INTO kevin (appid, owned, never, note, want, want_price, want_at, verdict, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(appid) DO UPDATE SET owned = excluded.owned, never = excluded.never, note = excluded.note, want = excluded.want, want_price = excluded.want_price, want_at = excluded.want_at, verdict = excluded.verdict, updated_at = excluded.updated_at`)
+      .bind(appid, (owned == null ? !!prev.owned : !!owned) ? 1 : 0, (never == null ? !!prev.never : !!never) ? 1 : 0, note === undefined ? (prev.note || null) : (note || null), wantNow ? 1 : 0, wantPrice, wantAt, v, now()).run();
     return json({ ok: true });
+  }
+
+  // Attach a PSN product by PlatPrices id when the matcher missed. Spends one PlatPrices request.
+  if (m === 'POST' && path === '/admin/attach') {
+    const { appid, ppid } = body;
+    if (!appid || !ppid) return bad('appid and ppid required');
+    if (!(await canSpend(env.DB, 1))) return bad('PlatPrices budget reserve reached; try next month', 429);
+    const { data } = await ppBatch(env, [Number(ppid)]);
+    if (!data.length) return bad('PlatPrices has no product with that ppid in this region', 404);
+    await acceptMatch(env, appid, data[0]);
+    return json({ ok: true, product: data[0].ProductName });
+  }
+
+  if (m === 'GET' && path === '/admin/calibration') {
+    const { results } = await env.DB.prepare(`SELECT g.appid, g.name, f.score, f.category, k.verdict, k.owned FROM kevin k JOIN games g ON g.appid = k.appid LEFT JOIN facets f ON f.appid = k.appid WHERE k.verdict IS NOT NULL ORDER BY f.score DESC`).all();
+    return json({ rows: results });
   }
 
   if (m === 'GET' && path === '/admin/settings') {

@@ -1,6 +1,6 @@
 # Survivors-like PSN tracker: architecture v0.1
 
-Status: v0.1 built Sep 9 2026. Sections 1 to 6 describe what is in the repo.
+Status: v0.4 built Sep 10 2026. Sections 1 to 6 describe what is in the repo; sections 9 to 11 list what v0.2 to v0.4 added.
 Decisions already made in chat: public site, one real user, $0/month, hybrid tagging (AI first pass, Kevin confirms high scorers), hub is both a filter and a weight.
 
 ## 1. What the site does
@@ -11,6 +11,8 @@ Four pages plus two admin pages:
 
 | Page | What it shows |
 |---|---|
+| Home | What changed since the last visit: sales ending in 3 days, new sales, new PS Store listings, preorders releasing inside 30 days, the wanted list with price drops, and the best unowned fits. |
+| Compare | Two or three games side by side on every facet, price, and rating, best value per row marked. |
 | Upcoming | Steam-tagged games with no PSN listing yet, plus PSN listings flagged `IsPreorder`. Sorted by taste score, then Steam release date. |
 | On sale | Matched games where `IsOnSale = 1`, with sale end date, discount, and whether this is the lowest price the site has seen. |
 | Browse | The whole matched catalog with the facet filters and the score. |
@@ -163,3 +165,79 @@ None. Decided Sep 9: no Discord, no email. The On sale and Upcoming pages are th
 5. Upcoming page (trivial once 2 and 3 exist), Game page, Discord if wanted.
 
 Each step ships as its own zip with only the files changed since the last one.
+
+## 9. What v0.2 added (Sep 9)
+
+Kevin's read on v0.1 was that it was bare. Two things were true: nothing was seeded yet, and the pages were database views rather than a tool that answers "what do I buy, and when." v0.2 addresses the second. The generator that produced most of it was category error at portfolio level: the site was architected as a catalog browser, its job is a buying decision. Borrowed domain (Kevin's CQV habit of asking whether a predictor grades itself) produced calibration.
+
+- **Home** is the landing page and a digest keyed to the last visit (stored in the browser): sales ending soon, new sales, new listings, imminent releases, wanted-list drops, best unowned fits.
+- **Wanted list.** "Want this" on a game records the price at that moment; Home flags any wanted game now cheaper than when it was added. This is the alert, without an alert channel.
+- **Deal verdict** on every price: lowest ever recorded, lowest this site has seen, within N% of the lowest, or has been N% cheaper. Computed in `shared/score.js` `dealVerdict` from PlatPrices' `LowestEverPrice` and the site's own snapshots.
+- **Verdicts and calibration.** Owned games can be marked loved / fine / bounced. Settings → Calibration lists them against their score and flags misfires (loved under 60, bounced over 80). This is how Kevin finds out whether the weights are right.
+- **Score breakdown** on the Game page: value × weight per facet with a bar, so a number is never a mystery.
+- **Compare** page, up to three games, selected from Browse or the Game page.
+- **Browse presets** (Best fits, Pure survivors, Authored hub, Prestige or NG+, On sale now, Under $10, Wildcards, Not tagged yet), max price and on-sale filters, sort by discount and review count, CSV and JSON export.
+- **Cover images** in every table and on the Game page (Steam header art).
+- **Game page**: price sparkline, most helpful Steam reviews, Metacritic and co-op/controller features, PS Store search link for unmatched games, and an admin "attach by ppid" for when the matcher misses.
+- **On sale** grouped into lowest-recorded and ending-within-3-days on top of the full list.
+- **Upcoming** split into not-on-Steam-yet (sorted by Steam date) and on-Steam-no-PSN.
+- **PS Plus tier** (browser setting): games in the Extra or Premium catalog get a mark and a Browse filter.
+- Footer shows the catalog counts and the PlatPrices attribution required by the Free plan.
+
+Schema: `migrations/0002_wants.sql` adds `kevin.want`, `want_price`, `want_at`, `verdict`, and `games.matched_at`. New API: `GET /api/home`, `GET /api/admin/calibration`, `POST /api/admin/attach`; `POST /api/admin/kevin` accepts `want` and `verdict`.
+
+Deferred, on purpose: alerts (Kevin does not want a push channel), a second region, trophy data, similarity between games, and any account system.
+
+## 10. v0.3: the look (Sep 9)
+
+Kevin asked for pizzazz with the theme carried through. What the research turned up first: the Fable 5.x UI showcases are hero sections, GLSL shaders, and Three.js scenes, built for a screenshot; the reviewers who tested it for real product screens found it tends to optimize for the dramatic frame over how the page behaves, and that grounded references beat vibes. The gaming dashboards on Dribbble are neon-on-black with glass panels, and the current trend is "liquid glass." None of that is a phone tool a single person checks before buying a game. So the overhaul borrows the game's own vernacular instead.
+
+Tokens (`src/styles.css`):
+
+| Name | Hex | Role |
+|---|---|---|
+| night | #12101a | background, purple-black like the run screen, never flat #111 |
+| stone | #1d1a28 | panels |
+| wall | #2c2740 | borders, rules, empty XP track |
+| bone | #e6e0cf | body text |
+| ash | #9b95ad | secondary text |
+| gold | #f5c542 | score, the player, primary button, headings |
+| gem | #4fc3ff | XP fill, links, good tier |
+| blood | #d9463e | warnings, "has been cheaper" |
+| moss | #6fd08c | sale prices |
+
+Type: Silkscreen (pixel face) for headings, nav, level numbers, buttons, table headers. IBM Plex Sans for everything read. Two families, clearly distinct.
+
+The one signature: the XP bar. The header carries a thin bar showing the share of tracked games that are on the PS Store. Every score in the site renders as an XP bar with the number set in the pixel face (`src/components/XpBar.jsx`), gold at 85+, gem-blue at 70+, dimmer below. The Home hero is a canvas horde (`src/components/Horde.jsx`): pixel bats and skeletons drifting toward a gold player square with a whip arc, blue gems pulsing in the field. It stops still under `prefers-reduced-motion` and is the only unprompted motion on the site.
+
+Deliberately not used: gradients as decoration, rounded corners, glass blur, card shadows, all-caps labels, middle-dot meta strings. Buttons are square. The background has a faint pixel-grid dot pattern, one repeating radial dot, which is the closest the site comes to texture.
+
+Copy: "Loading the run" is the only themed string. Everything else stays plain speech.
+
+## 11. v0.4: neat vs annoying (Sep 10)
+
+The question asked before this pass: what does a person checking this on a phone before buying a game find neat, and what do they find annoying? The complaint that shows up most for the incumbents (IsThereAnyDeal, PS Deals, and the like) is stale state: expired deals still listed, duplicate or overlapping editions, prices that lag. The praise is for honest history, a clear "buy or wait" signal, and alerts that fire only when they should.
+
+Robustness, worker side:
+- Every upstream fetch has a timeout (Steam 12 s, PlatPrices 15 s) so one hung request cannot eat a cron tick.
+- Each stage has a 40 s time budget and stops taking new items past it. Cron ticks now always finish.
+- Steam calls are spaced 250 to 300 ms apart; a 429 or 403 backs off five seconds and is recorded as such.
+- Games that fail enrichment five times stop being retried (`games.error_count`, migration 0003). They stay visible under Errors in Queue.
+- The model call retries once with a stricter instruction when the first reply is not JSON.
+- `refresh` reads PlatPrices' `missing` list and marks those products delisted instead of leaving them on the old price forever.
+- Discover throws a named error when Steam returns zero items for every tag, which is the signature of a search-HTML change, rather than logging a quiet zero.
+
+Robustness, data side:
+- A sale whose `discounted_until` has passed is not a sale, anywhere, even before tonight's refresh. The API computes it, the On sale view filters on it, the nav badge counts only live sales, and the Game page says "Sale ended, price refreshes tonight."
+- `/meta` reports `prices_stale` when the newest refresh is older than 48 h; the site shows a banner.
+- `/meta` reports whether the PlatPrices key is set; admins see a banner until it is.
+
+Site side:
+- An error boundary around every page: a bad row shows an error and a reload link instead of a blank screen.
+- Browse filters and On sale sort persist across navigation and reloads. Coming back from a game page does not reset the list.
+- "Since last visit" means the previous sitting, not the previous page load: a visit rolls over after six hours away.
+- The horde pauses when the tab is hidden, and a click pauses or resumes it, remembered per device.
+- External links open in a new tab.
+- Nav badges: live sale count on On sale; matches plus facets waiting on Queue (admin only).
+- Sticky header; the nav scrolls sideways on narrow phones instead of wrapping.
+- PWA manifest and icons, so the site can sit on the iPhone home screen as an app.
