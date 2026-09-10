@@ -12,20 +12,26 @@ export const CAP_RE = /quota|limit|429|exceed|neurons|allocation|4006/i;
 export const isCapError = (e) => CAP_RE.test(String(e && e.message || e));
 
 // Claude via the Messages API. Used for the tag step when ANTHROPIC_API_KEY is set; one subrequest per call.
-async function runClaude(env, { system, user, maxTokens }) {
+export async function runClaude(env, { system, user, maxTokens, webSearch = false, maxSearches = 4 }) {
   const model = env.CLAUDE_MODEL || 'claude-haiku-4-5';
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort('timeout'), 60000);
+  const timer = setTimeout(() => ctl.abort('timeout'), webSearch ? 120000 : 60000);
   try {
+    const body = { model, max_tokens: maxTokens, temperature: 0, system: scrub(system), messages: [{ role: 'user', content: scrub(user) }] };
+    if (webSearch) body.tools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: maxSearches }];
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST', signal: ctl.signal,
       headers: { 'content-type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model, max_tokens: maxTokens, temperature: 0, system: scrub(system), messages: [{ role: 'user', content: scrub(user) }] })
+      body: JSON.stringify(body)
     });
     const j = await res.json().catch(() => null);
     if (!res.ok) throw new Error(`claude ${res.status}: ${(j && j.error && j.error.message) || 'request failed'}`);
-    const text = (j.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('\n');
-    return { model, text, json: extractJSON(text) };
+    const texts = (j.content || []).filter((c) => c.type === 'text').map((c) => c.text);
+    const text = texts.join('\n');
+    // The JSON is in the final text block; earlier blocks are the model narrating its searches.
+    const json = extractJSON(texts[texts.length - 1] || '') || extractJSON(text);
+    const searches = (j.content || []).filter((c) => c.type === 'server_tool_use').length;
+    return { model: webSearch ? `${model}+web` : model, text, json, searches, usage: j.usage || null };
   } finally { clearTimeout(timer); }
 }
 

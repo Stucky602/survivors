@@ -21,6 +21,14 @@ ALTER TABLE kevin ADD COLUMN want INTEGER DEFAULT 0; ALTER TABLE kevin ADD COLUM
 
 Run it before pushing the v0.2 code. The worker reads those columns on every page.
 
+For v0.9, paste this:
+
+```
+ALTER TABLE games ADD COLUMN ps5_plan_url TEXT; ALTER TABLE games ADD COLUMN ps5_plan_method TEXT;
+```
+
+Then set the worker variable `PLANS_WEB_SEARCH` to `1` (needs `ANTHROPIC_API_KEY`) and press Re-read plans on Queue.
+
 For v0.8, paste this:
 
 ```

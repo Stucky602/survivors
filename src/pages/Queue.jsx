@@ -16,6 +16,11 @@ export default function Queue({ meta, onChange }) {
   const [single, setSingle] = useState(null);
   const [runner, setRunner] = useState(null);
   const [scope, setScopeState] = useState(localStorage.getItem('survivors.scope') || 'all');
+  const [planStats, setPlanStats] = useState(null);
+  const [dbgId, setDbgId] = useState('');
+  const [dbg, setDbg] = useState(null);
+  const loadPlanStats = () => api('/admin/plan-stats', { admin: true }).then(setPlanStats).catch((e) => setErr(e.message));
+  const runDebug = async () => { if (!dbgId) return; setBusy('dbg'); setDbg(null); try { setDbg(await api(`/admin/plan-debug?appid=${Number(dbgId)}`, { admin: true })); } catch (e) { setErr(e.message); } setBusy(''); };
   const setScope = (v) => { setScopeState(v); localStorage.setItem('survivors.scope', v); };
   const hashArg = location.hash.split('/')[2];
   const runnerStatus = () => api('/admin/runner/status', { admin: true }).then(setRunner).catch(() => setRunner({ unavailable: true }));
@@ -107,6 +112,7 @@ export default function Queue({ meta, onChange }) {
         <button onClick={() => run('retry-errors')} disabled={!!busy}>Retry errored games</button>
         <button onClick={() => { if (confirm('Re-score games tagged by an older model with the current one? Games already on the current model and anything you confirmed by hand are skipped. Old scores stay until replaced.')) run('retag'); }} disabled={!!busy}>Re-score with current model</button>
         <button onClick={() => run('rematch')} disabled={!!busy} title="Re-check not-listed games whose title has a subtitle or edition word. Matched games are never touched.">Re-match not listed</button>
+        <button onClick={() => run('replan')} disabled={!!busy} title="Re-read PS Store plans for games not yet read with the current method. Dated announcements are kept.">Re-read plans</button>
       </div>
       {log.length > 0 && <pre className="log">{log.join('\n')}</pre>}
 
@@ -116,6 +122,28 @@ export default function Queue({ meta, onChange }) {
           <tbody>{meta.runs.map((r) => <tr key={r.stage} className={r.ok === 0 ? 'bad' : ''}><td>{r.stage}</td><td>{(r.started_at || '').slice(0, 16).replace('T', ' ')}</td><td>{r.ok == null ? 'running' : r.ok ? 'ok' : 'failed'}</td><td className="num">{r.count}</td><td className="ev">{r.error}</td></tr>)}</tbody>
         </table>
       )}
+
+      <h2>PS Store plans, under the hood</h2>
+      <p className="muted">Method now: <b>{meta && meta.plan_method === 'web' ? 'Claude with web search' : 'Steam news feed, small model'}</b>.{meta && meta.plan_method !== 'web' ? ' To switch on web search, set the PLANS_WEB_SEARCH variable to 1 on the worker (needs the Anthropic key), then press Re-read plans.' : ''}</p>
+      <div className="actions">
+        <button onClick={loadPlanStats} disabled={!!busy}>Show plan stats</button>
+        <input type="number" placeholder="appid" value={dbgId} onChange={(e) => setDbgId(e.target.value)} />
+        <button onClick={runDebug} disabled={!!busy || !dbgId}>{busy === 'dbg' ? 'Reading…' : 'Read one game live'}</button>
+      </div>
+      {planStats && (
+        <>
+          <p className="muted">Steam news feeds: {planStats.news.has_news} games with posts, {planStats.news.empty} with an empty feed, {planStats.news.missing} not fetched yet, of {planStats.news.total}.{planStats.news.empty > planStats.news.has_news ? ' Mostly empty means Steam is refusing the news calls; the web method does not depend on it.' : ''}</p>
+          <table className="plain"><thead><tr><th>Status</th><th>Method</th><th className="num">Games</th></tr></thead><tbody>{planStats.by_status.map((r, i) => <tr key={i}><td>{r.status}</td><td className="muted">{r.method || '–'}</td><td className="num">{r.n}</td></tr>)}</tbody></table>
+        </>
+      )}
+      {dbg && (dbg.error ? <p className="bar warn">{dbg.error}</p> : (
+        <div className="editor">
+          <p><b>{dbg.name}</b> <span className="muted">via {dbg.method}, model {dbg.model}{dbg.searches != null ? `, ${dbg.searches} searches` : ''}</span></p>
+          {dbg.news_count != null && <p className="muted">Steam news posts cached: {dbg.news_count}. Mentioning consoles: {dbg.console_mentions.length ? dbg.console_mentions.map((m) => `${m.date} "${m.title}"`).join('; ') : 'none'}.</p>}
+          <p>Parsed: <b>{dbg.parsed.status}</b> {dbg.parsed.date || dbg.parsed.window || ''} {dbg.parsed.platform !== 'unspecified' ? `(${dbg.parsed.platform})` : ''}{dbg.parsed.note ? <> — “{dbg.parsed.note}”</> : null}{dbg.parsed.url ? <> <a href={dbg.parsed.url} target="_blank" rel="noreferrer">source</a></> : null}</p>
+          <pre className="log">{dbg.raw_text}</pre>
+        </div>
+      ))}
 
       {single && (
         <>

@@ -2,8 +2,8 @@
 import { now, daysFromNow, getSetting, setSetting, startRun, endRun, upsertGameFromSteamSearch, canSpend } from './db.js';
 import * as steam from './steam.js';
 import * as pp from './platprices.js';
-import { runJSON, isCapError } from './ai.js';
-import { MATCH_SYSTEM, matchUser, TAG_SYSTEM, tagUser, PLAN_SYSTEM, planUser } from './prompts.js';
+import { runJSON, runClaude, isCapError } from './ai.js';
+import { MATCH_SYSTEM, matchUser, TAG_SYSTEM, tagUser, PLAN_SYSTEM, planUser, PLAN_WEB_SYSTEM, planWebUser } from './prompts.js';
 import { computeQuality, scoreGame, categorize, needsReview, normalizeFacets, normalizeEvidence, DEFAULT_SETTINGS } from '../../shared/score.js';
 
 // PLAN=free keeps every stage under Cloudflare's 50-subrequest-per-invocation cap. PLAN=paid (Workers Paid, 1,000) runs big.
@@ -297,41 +297,89 @@ export async function tag(env, opts = {}) {
 }
 
 // 6. Plans: what has the developer said about a PlayStation release. Steam-only games only; matched games have a real date.
-export const PLAN_STATUSES = ['announced_date', 'announced_window', 'announced', 'planned', 'not_planned', 'unknown'];
+// Two methods: 'news' reads the Steam news feed with the small Workers AI model (free); 'web' has Claude search the web
+// (PLANS_WEB_SEARCH=1 and ANTHROPIC_API_KEY set), which is what actually finds announcements that never hit Steam news.
+export const PLAN_STATUSES = ['announced_date', 'announced_window', 'announced', 'planned', 'not_planned', 'unknown', 'listed'];
+export const planMethod = (env) => (env.ANTHROPIC_API_KEY && String(env.PLANS_WEB_SEARCH || '') === '1' ? 'web' : 'news');
+
+// Normalise whatever the model returned. Accepts status/ps5_status, any case, stray spaces.
+export function parsePlan(j) {
+  const raw = String((j && (j.ps5_status ?? j.status ?? j.playstation_status)) || 'unknown').toLowerCase().trim().replace(/[\s-]+/g, '_');
+  const status = PLAN_STATUSES.includes(raw) ? raw : (/date/.test(raw) ? 'announced_date' : /window/.test(raw) ? 'announced_window' : /not/.test(raw) ? 'not_planned' : /announce|confirm/.test(raw) ? 'announced' : /plan/.test(raw) ? 'planned' : /list|available|out now|released/.test(raw) ? 'listed' : 'unknown');
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(String((j && (j.ps5_date ?? j.date)) || '')) ? (j.ps5_date ?? j.date) : null;
+  const window = typeof (j && (j.ps5_window ?? j.window)) === 'string' ? String(j.ps5_window ?? j.window).slice(0, 40) : null;
+  const note = typeof (j && j.evidence) === 'string' ? j.evidence.slice(0, 300) : null;
+  const platform = ['ps5', 'ps4', 'both'].includes(String((j && j.platform) || '').toLowerCase()) && /^(announced|listed)/.test(status) ? String(j.platform).toLowerCase() : 'unspecified';
+  const url = typeof (j && j.source_url) === 'string' && /^https?:\/\//.test(j.source_url) ? j.source_url.slice(0, 300) : null;
+  const conf = Number(j && j.confidence);
+  return { status, date: status === 'announced_date' || status === 'listed' ? date : null, window: status === 'announced_window' ? window : null, note: status === 'unknown' ? null : note, platform, url, confidence: Number.isFinite(conf) ? conf : null };
+}
+
+async function readPlanFor(env, g) {
+  const method = planMethod(env);
+  if (method === 'web') {
+    const ai = await runClaude(env, { system: PLAN_WEB_SYSTEM, user: planWebUser(g), maxTokens: 1200, webSearch: true, maxSearches: 4 });
+    return { ai, method };
+  }
+  const d = JSON.parse(g.appdetails_json || '{}');
+  const news = JSON.parse(g.news_json || '[]');
+  const ai = await runJSON(env, { system: PLAN_SYSTEM, user: planUser({ name: g.name, short_description: d.short_description, description: d.about, news }), maxTokens: 300, model: smallModel(env) });
+  return { ai, method, newsCount: news.length };
+}
+
 export async function plans(env, opts = {}) {
   return withRun(env.DB, 'plans', async () => {
-    if (await aiCapped(env)) return { count: 0, note: 'daily AI allocation used, waiting for 00:00 UTC' };
-    const limit = limitOf(env, opts.limit);
+    const method = planMethod(env);
+    if (method === 'news' && (await aiCapped(env))) return { count: 0, note: 'daily AI allocation used, waiting for 00:00 UTC' };
+    const limit = Math.min(method === 'web' ? 25 : 400, limitOf(env, opts.limit));
     const { results } = await env.DB.prepare(
-      `SELECT g.appid, g.name, c.appdetails_json, c.news_json FROM games g JOIN steam_cache c ON c.appid = g.appid
+      `SELECT g.appid, g.name, g.developer, g.publisher, g.steam_release, c.appdetails_json, c.news_json FROM games g JOIN steam_cache c ON c.appid = g.appid
        WHERE g.status = 'enriched' AND g.ppid IS NULL AND c.news_json IS NOT NULL AND g.ps5_plan_at IS NULL${scopeSql(scopeOf(opts))}
        ORDER BY COALESCE(g.steam_pos,0) DESC LIMIT ?`
     ).bind(limit).all();
-    let n = 0;
+    let n = 0, found = 0;
     const over = budgetClock(env);
     for (const g of results) {
       if (over()) break;
       try {
-        const d = JSON.parse(g.appdetails_json || '{}');
-        const news = JSON.parse(g.news_json || '[]');
-        const ai = await runJSON(env, { system: PLAN_SYSTEM, user: planUser({ name: g.name, short_description: d.short_description, description: d.about, news }), maxTokens: 300, model: smallModel(env) });
-        const j = ai.json || {};
-        const status = PLAN_STATUSES.includes(j.ps5_status) ? j.ps5_status : 'unknown';
-        const date = /^\d{4}-\d{2}-\d{2}$/.test(String(j.ps5_date || '')) ? j.ps5_date : null;
-        const window = typeof j.ps5_window === 'string' ? j.ps5_window.slice(0, 40) : null;
-        const note = typeof j.evidence === 'string' ? j.evidence.slice(0, 300) : null;
-        const platform = ['ps5', 'ps4', 'both'].includes(j.platform) && /^announced/.test(status) ? j.platform : 'unspecified';
-        await env.DB.prepare(`UPDATE games SET ps5_plan = ?, ps5_plan_date = ?, ps5_plan_window = ?, ps5_plan_note = ?, ps5_plan_platform = ?, ps5_plan_at = ? WHERE appid = ?`)
-          .bind(status, status === 'announced_date' ? date : null, status === 'announced_window' ? window : null, status === 'unknown' ? null : note, platform, now(), g.appid).run();
+        const { ai } = await readPlanFor(env, g);
+        const pl = parsePlan(ai.json || {});
+        if (pl.status !== 'unknown') found++;
+        await env.DB.prepare(`UPDATE games SET ps5_plan = ?, ps5_plan_date = ?, ps5_plan_window = ?, ps5_plan_note = ?, ps5_plan_platform = ?, ps5_plan_url = ?, ps5_plan_method = ?, ps5_plan_at = ? WHERE appid = ?`)
+          .bind(pl.status, pl.date, pl.window, pl.note, pl.platform, pl.url, method, now(), g.appid).run();
+        // A web search that says "already listed" is a match the search step missed: put it back in the match queue.
+        if (pl.status === 'listed') await env.DB.prepare(`UPDATE games SET psn_status = 'not_listed', next_match_at = NULL WHERE appid = ? AND ppid IS NULL`).bind(g.appid).run();
         n++;
       } catch (e) {
         const msg = String(e.message || e);
-        if (isCapError(e)) { await markAiCapped(env); return { count: n, note: 'daily AI allocation reached, resumes after 00:00 UTC' }; }
-        await env.DB.prepare(`UPDATE games SET last_error = ?, ps5_plan = 'unknown', ps5_plan_at = ? WHERE appid = ?`).bind(`plans: ${msg.slice(0, 280)}`, now(), g.appid).run();
+        if (method === 'news' && isCapError(e)) { await markAiCapped(env); return { count: n, note: 'daily AI allocation reached, resumes after 00:00 UTC' }; }
+        if (/^claude (401|402|403|429)/.test(msg)) return { count: n, note: `stopped: ${msg.slice(0, 120)}` };
+        await env.DB.prepare(`UPDATE games SET last_error = ?, ps5_plan = 'unknown', ps5_plan_method = ?, ps5_plan_at = ? WHERE appid = ?`).bind(`plans: ${msg.slice(0, 280)}`, method, now(), g.appid).run();
       }
     }
-    return { count: n };
+    return { count: n, note: `${found} with something announced, method ${method}` };
   });
+}
+
+// Re-queue plans reads: everything not yet read with the current method, or (all: true) every non-dated one.
+export async function replan(env, opts = {}) {
+  return withRun(env.DB, 'replan', async () => {
+    const method = planMethod(env);
+    const r = opts.all
+      ? await env.DB.prepare(`UPDATE games SET ps5_plan_at = NULL WHERE ppid IS NULL AND ps5_plan_at IS NOT NULL AND ps5_plan != 'announced_date'`).run()
+      : await env.DB.prepare(`UPDATE games SET ps5_plan_at = NULL WHERE ppid IS NULL AND ps5_plan_at IS NOT NULL AND ps5_plan != 'announced_date' AND (ps5_plan_method IS NULL OR ps5_plan_method != ?)`).bind(method).run();
+    return { count: r.meta.changes, note: `queued for a ${method} read; dated announcements kept` };
+  });
+}
+
+// One game, live, with everything the reader saw. For the diagnostics panel.
+export async function planDebug(env, appid) {
+  const g = await env.DB.prepare(`SELECT g.appid, g.name, g.developer, g.publisher, g.steam_release, c.appdetails_json, c.news_json FROM games g LEFT JOIN steam_cache c ON c.appid = g.appid WHERE g.appid = ?`).bind(appid).first();
+  if (!g) return { error: 'no such game' };
+  const news = g.news_json ? JSON.parse(g.news_json) : null;
+  const consoleMentions = (news || []).filter((x) => /playstation|ps5|ps4|console|sony/i.test(`${x.title} ${x.text}`)).map((x) => ({ date: x.date, title: x.title }));
+  const { ai, method } = await readPlanFor(env, g);
+  return { appid: g.appid, name: g.name, method, news_count: news ? news.length : null, console_mentions: consoleMentions, model: ai.model, searches: ai.searches ?? null, raw_text: String(ai.text || '').slice(0, 3000), parsed: parsePlan(ai.json || {}) };
 }
 
 // Queue unconfirmed games tagged by a DIFFERENT model for a fresh pass with the current one.
@@ -391,4 +439,4 @@ export async function rescore(env) {
   });
 }
 
-export const STAGES = { discover, enrich, match, refresh, tag, plans, rescore, retag, rematch, 'retry-errors': retryErrors };
+export const STAGES = { discover, enrich, match, refresh, tag, plans, rescore, retag, rematch, replan, 'retry-errors': retryErrors };

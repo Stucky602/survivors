@@ -100,3 +100,21 @@ export function planUser(corpus) {
   }
   return parts.join('\n\n');
 }
+
+export const PLAN_WEB_SYSTEM = `You find out whether a specific PC game has a PlayStation (PS5 or PS4) release announced, using web search. PlayStation means the PlayStation Store: a PS5 version, a PS4 version, or both all count.
+Search for the game name with "PS5", "PlayStation", and "console", and check the developer's or publisher's own site or social posts, Steam news, the PlayStation Blog, press coverage, and store listings. Two to four searches is plenty. Do not confuse the game with a similarly named one; check the developer matches.
+Report only what a source states. Never infer from genre or from other games by the same developer.
+Statuses:
+- listed: the game is already on the PlayStation Store (a store listing or a launch announcement with a past date). Give the date if stated.
+- announced_date: a specific PlayStation release date is stated. Put it in ps5_date as YYYY-MM-DD.
+- announced_window: a window is stated (month, quarter, season, or year). Put it in ps5_window as written.
+- announced: a PlayStation version is confirmed, no date or window.
+- planned: the developer says consoles are planned or being worked on, without confirming PlayStation.
+- not_planned: the developer says there are no plans for consoles or PlayStation.
+- unknown: nothing found either way.
+platform: "ps5", "ps4", "both", or "unspecified".
+Answer with JSON only, as the last thing you write: {"ps5_status": "...", "platform": "...", "ps5_date": null or "YYYY-MM-DD", "ps5_window": null or "...", "evidence": "the sentence it came from, under 300 characters", "source_url": "the page it came from, or null", "confidence": 0 to 1}`;
+
+export function planWebUser(g) {
+  return `Game: ${g.name}\nDeveloper: ${g.developer || 'unknown'}. Publisher: ${g.publisher || 'unknown'}. Released on Steam: ${g.steam_release || 'unknown'}.\nSteam page: https://store.steampowered.com/app/${g.appid}/\n\nHas this game been announced for PlayStation? Search, then answer with the JSON object only.`;
+}

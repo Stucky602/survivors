@@ -58,3 +58,16 @@ assert.deepEqual(nameVariants('Vampire Survivors'), ['Vampire Survivors']);
 assert.deepEqual(nameVariants('Halls of Torment - Definitive Edition'), ['Halls of Torment - Definitive Edition', 'Halls of Torment']);
 assert.equal(nameVariants('Deep Rock Galactic: Survivor™')[0], 'Deep Rock Galactic: Survivor');
 console.log('parse.test v0.8: ok');
+
+
+// v0.9: plan parsing tolerance
+import { parsePlan } from '../worker/lib/stages.js';
+assert.equal(parsePlan({ status: 'Announced Date', date: '2026-11-03', platform: 'PS5' }).status, 'announced_date');
+assert.equal(parsePlan({ status: 'Announced Date', date: '2026-11-03', platform: 'PS5' }).date, '2026-11-03');
+assert.equal(parsePlan({ status: 'Announced Date', date: '2026-11-03', platform: 'PS5' }).platform, 'ps5');
+assert.equal(parsePlan({ ps5_status: 'not planned' }).status, 'not_planned');
+assert.equal(parsePlan({ ps5_status: 'ANNOUNCED_WINDOW', ps5_window: 'Q1 2027' }).window, 'Q1 2027');
+assert.equal(parsePlan({ ps5_status: 'listed', source_url: 'https://store.playstation.com/x' }).url, 'https://store.playstation.com/x');
+assert.equal(parsePlan({ ps5_status: 'garbage' }).status, 'unknown');
+assert.equal(parsePlan(null).status, 'unknown');
+console.log('parse.test v0.9: ok');

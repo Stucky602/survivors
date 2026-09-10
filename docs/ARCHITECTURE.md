@@ -1,6 +1,6 @@
 # Survivors-like PSN tracker: architecture v0.1
 
-Status: v0.8 built Sep 10 2026. Sections 1 to 6 describe what is in the repo; sections 9 to 11 list what v0.2 to v0.4 added.
+Status: v0.9 built Sep 10 2026. Sections 1 to 6 describe what is in the repo; sections 9 to 11 list what v0.2 to v0.4 added.
 Decisions already made in chat: public site, one real user, $0/month, hybrid tagging (AI first pass, Kevin confirms high scorers), hub is both a filter and a weight.
 
 ## 1. What the site does
@@ -316,3 +316,10 @@ Both optional, both behind a single dashboard setting, nothing changes if neithe
 - **Playtime**: median hours of the 20 most helpful Steam reviewers, and cost per hour at today's PS price. **Playing now**: Steam concurrent players (keyless), with "quiet" under 5 and "busy" over 500. Both from enrich (migration 0006).
 - **The genre by quarter**: a bar chart of tracked games by Steam release date, blue for the share on the PS Store.
 - The horde follows the pointer or finger; XP bars fill in on load; "Want this" fires a coin burst.
+
+
+## 16. v0.9: plans that actually look (Sep 10)
+
+Kevin's read: 0 announcements found across 500 games cannot be right. Agreed. Two failure paths in the news-feed method: Steam refusing the news calls (enrich stored an empty feed, the reader correctly said "nothing"), and the 8B model answering with keys the normaliser did not accept (`status` vs `ps5_status`, capitals), which filed as unknown. `parsePlan()` now accepts the variants, and Queue has a diagnostics panel: plan stats (how many feeds are empty, counts by status and method) and "Read one game live", which runs the reader on one appid and shows the cached news, the console mentions, the raw model text, and what parsed.
+
+The real fix is a second method. With `PLANS_WEB_SEARCH=1` and the Anthropic key, the plans step calls Claude with the Messages API web-search tool (up to 4 searches per game) and asks it to check the developer's site and socials, Steam news, the PlayStation Blog, and press, then answer with a status, the sentence, and the source URL (`ps5_plan_url`, `ps5_plan_method`, migration 0007). A new `listed` status means the web found a PS Store listing the matcher missed; that game is pushed back into the match queue. Cost is a few cents per game, roughly $10 to $15 for the catalog once. Web reads run 25 per batch. "Re-read plans" queues everything not yet read with the current method; dated announcements are never re-read.

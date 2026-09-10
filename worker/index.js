@@ -1,5 +1,5 @@
 // Survivors worker: API routes, cron stages, and the static site (via the assets binding).
-import { STAGES, acceptMatch, aiCapped } from './lib/stages.js';
+import { STAGES, acceptMatch, aiCapped, planDebug, planMethod } from './lib/stages.js';
 import { Runner, pickStage } from './lib/runner.js';
 export { Runner };
 import { getSetting, setSetting, lastRuns, readBudget, now } from './lib/db.js';
@@ -21,7 +21,7 @@ const GAME_SELECT = `
          f.facets_json, f.evidence_json, f.proposed_json, f.score, f.category, f.confirmed_by, f.needs_review, f.tagged_at, f.model,
          k.owned, k.never, k.note, k.want, k.want_price, k.want_at, k.verdict, g.matched_at,
          g.ps5_plan, g.ps5_plan_date, g.ps5_plan_window, g.ps5_plan_note, g.ps5_plan_platform, g.ps5_plan_at,
-         g.review_hours_median, g.players_now, g.players_at
+         g.review_hours_median, g.players_now, g.players_at, g.ps5_plan_url, g.ps5_plan_method
   FROM games g
   LEFT JOIN psn_products p ON p.ppid = g.ppid
   LEFT JOIN facets f ON f.appid = g.appid
@@ -46,7 +46,7 @@ function rowToGame(r, full = false) {
     facets, score: r.score, category: r.category, confirmed: !!r.confirmed_by, needs_review: !!r.needs_review, tagged_at: r.tagged_at,
     owned: !!r.owned, never: !!r.never, note: r.note || '', want: !!r.want, want_price: r.want_price, want_at: r.want_at, verdict: r.verdict || null, matched_at: r.matched_at,
     hours_median: r.review_hours_median, players_now: r.players_now, players_at: r.players_at,
-    ps5_plan: r.ps5_plan_at ? { status: r.ps5_plan || 'unknown', platform: r.ps5_plan_platform || 'unspecified', date: r.ps5_plan_date, window: r.ps5_plan_window, note: r.ps5_plan_note, at: r.ps5_plan_at } : null
+    ps5_plan: r.ps5_plan_at ? { status: r.ps5_plan || 'unknown', platform: r.ps5_plan_platform || 'unspecified', date: r.ps5_plan_date, window: r.ps5_plan_window, note: r.ps5_plan_note, url: r.ps5_plan_url, method: r.ps5_plan_method, at: r.ps5_plan_at } : null
   };
   if (full) {
     out.evidence = r.evidence_json ? JSON.parse(r.evidence_json) : null;
@@ -100,7 +100,7 @@ async function handleApi(request, env, ctx) {
     ).first();
     const lastRefresh = await env.DB.prepare('SELECT MAX(refreshed_at) AS t FROM psn_products').first();
     const ageH = lastRefresh?.t ? (Date.now() - Date.parse(lastRefresh.t)) / 36e5 : null;
-    return json({ taste, counts, runs: await lastRuns(env.DB), budget: await readBudget(env.DB), last_refresh: lastRefresh?.t || null, prices_stale: ageH != null && ageH > 48, region: env.REGION || 'US', has_platprices_key: !!env.PLATPRICES_KEY, plan: String(env.PLAN || 'free').toLowerCase(), tagger: env.ANTHROPIC_API_KEY ? (env.CLAUDE_MODEL || 'claude-haiku-4-5') : (env.AI_MODEL || 'workers-ai') });
+    return json({ taste, counts, runs: await lastRuns(env.DB), budget: await readBudget(env.DB), last_refresh: lastRefresh?.t || null, prices_stale: ageH != null && ageH > 48, region: env.REGION || 'US', has_platprices_key: !!env.PLATPRICES_KEY, plan_method: planMethod(env), plan: String(env.PLAN || 'free').toLowerCase(), tagger: env.ANTHROPIC_API_KEY ? (env.CLAUDE_MODEL || 'claude-haiku-4-5') : (env.AI_MODEL || 'workers-ai') });
   }
 
 
@@ -221,6 +221,17 @@ async function handleApi(request, env, ctx) {
     if (!data.length) return bad('PlatPrices has no product with that ppid in this region', 404);
     await acceptMatch(env, appid, data[0]);
     return json({ ok: true, product: data[0].ProductName });
+  }
+
+  if (m === 'GET' && path === '/admin/plan-stats') {
+    const by = (await env.DB.prepare(`SELECT COALESCE(ps5_plan,'(unread)') AS status, COALESCE(ps5_plan_method,'') AS method, COUNT(*) AS n FROM games WHERE status = 'enriched' AND ppid IS NULL GROUP BY 1, 2 ORDER BY n DESC`).all()).results;
+    const news = await env.DB.prepare(`SELECT SUM(c.news_json IS NULL) AS missing, SUM(c.news_json = '[]') AS empty, SUM(c.news_json IS NOT NULL AND c.news_json != '[]') AS has_news, COUNT(*) AS total FROM games g LEFT JOIN steam_cache c ON c.appid = g.appid WHERE g.status = 'enriched'`).first();
+    return json({ method: planMethod(env), by_status: by, news });
+  }
+  if (m === 'GET' && path === '/admin/plan-debug') {
+    const appid = Number(url.searchParams.get('appid'));
+    if (!appid) return bad('appid required');
+    return json(await planDebug(env, appid));
   }
 
   if (m === 'GET' && path === '/admin/calibration') {

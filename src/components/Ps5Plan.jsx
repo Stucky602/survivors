@@ -7,7 +7,8 @@ export const PLAN_LABEL = {
   announced: 'PlayStation version announced',
   planned: 'Consoles planned',
   not_planned: 'Not currently planned',
-  unknown: 'Nothing announced'
+  unknown: 'Nothing announced',
+  listed: 'On the PS Store (matcher missed it)'
 };
 
 // One line: what is known about a PlayStation release for a game without a listing.
@@ -24,7 +25,8 @@ export default function Ps5Plan({ g, long = false }) {
   else if (p.status === 'announced') main = <span className="sale">{PLAN_LABEL.announced}</span>;
   else if (p.status === 'planned') main = <span>{PLAN_LABEL.planned}</span>;
   else if (p.status === 'not_planned') main = <span className="warn-text">{PLAN_LABEL.not_planned}</span>;
+  else if (p.status === 'listed') main = <span className="sale">{PLAN_LABEL.listed}{p.date ? `, ${fmtDate(p.date)}` : ''}</span>;
   else main = <span className="muted">{PLAN_LABEL.unknown}</span>;
   const plat = p.platform === 'ps4' ? ' (PS4 version, plays on PS5)' : p.platform === 'both' ? ' (PS5 and PS4)' : p.platform === 'ps5' ? ' (PS5)' : '';
-  return <span>{main}{plat ? <span className="muted">{plat}</span> : null}{long && p.note ? <span className="muted"> — “{p.note}”</span> : null}</span>;
+  return <span>{main}{plat ? <span className="muted">{plat}</span> : null}{long && p.note ? <span className="muted"> — “{p.note}”</span> : null}{long && p.url ? <> <a href={p.url} target="_blank" rel="noreferrer">source</a></> : null}{long && p.method ? <span className="muted"> ({p.method === 'web' ? 'web search' : 'Steam news'})</span> : null}</span>;
 }
