@@ -27,12 +27,15 @@
   "vars": {
     "REGION": "US",
     "PLAN": "free",
+    "BATCH_LIMIT_PAID": "100",
     "CLAUDE_MODEL": "claude-haiku-4-5",
     "AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     "AI_MODEL_SMALL": "@cf/meta/llama-3.1-8b-instruct-fast",
     "BATCH_LIMIT": "12"
   },
   "observability": { "enabled": true },
-  "workers_dev": true
+  "workers_dev": true,
+  // Dashboard edits to variables (PLAN, BATCH_LIMIT, models) survive deploys instead of being reset from this file.
+  "keep_vars": true
   // Secrets, set in the dashboard under Variables and Secrets: PLATPRICES_KEY, ADMIN_TOKEN, ANTHROPIC_API_KEY (optional)
 }

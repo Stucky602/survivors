@@ -3,6 +3,8 @@ import { api, getLastVisit, markVisit, getToken } from '../api.js';
 import GameTable, { Price, CATEGORY_LABEL } from '../components/GameTable.jsx';
 import Horde from '../components/Horde.jsx';
 import XpBar from '../components/XpBar.jsx';
+import Roll from '../components/Roll.jsx';
+import Timeline from '../components/Timeline.jsx';
 
 export default function Home({ meta }) {
   const [d, setD] = useState(null);
@@ -36,6 +38,11 @@ export default function Home({ meta }) {
         </div>
       </section>
       {empty && <p className="bar">The catalog is empty. {getToken() ? <a href="#/queue">Run Discover in Queue</a> : <a href="#/settings">Enter the admin token</a>} to start.</p>}
+
+      {d.rollPool && d.rollPool.length >= 3 && (<>
+        <h2>Can't decide</h2>
+        <Roll pool={d.rollPool} />
+      </>)}
 
       {d.drops.length > 0 && (<>
         <h2>Wanted games that dropped below the price when you added them</h2>
@@ -75,6 +82,12 @@ export default function Home({ meta }) {
       ) : <p className="empty">Nothing scored yet.</p>}
 
       {nothingNew && !empty && <p className="muted">Quiet week. Nothing changed on the store side for tracked games.</p>}
+
+      {d.releases && d.releases.length > 10 && (<>
+        <h2>The genre, by quarter</h2>
+        <p className="muted">Tracked games by Steam release date. Blue is the share that has reached the PS Store.</p>
+        <Timeline releases={d.releases} />
+      </>)}
     </>
   );
 }

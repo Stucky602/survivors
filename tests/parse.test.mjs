@@ -49,3 +49,12 @@ assert.ok(!/\u0000/.test(s1));
 assert.equal(isCapError(new Error('4006: you have used up your daily free allocation of 10,000 neurons')), true);
 assert.equal(isCapError(new Error('8006: Invalid data for body')), false);
 console.log('parse.test v0.6.2: ok');
+
+
+// v0.8: search name variants
+import { nameVariants } from '../worker/lib/stages.js';
+assert.deepEqual(nameVariants('Nordic Ashes: Survivors of Ragnarok'), ['Nordic Ashes: Survivors of Ragnarok', 'Nordic Ashes']);
+assert.deepEqual(nameVariants('Vampire Survivors'), ['Vampire Survivors']);
+assert.deepEqual(nameVariants('Halls of Torment - Definitive Edition'), ['Halls of Torment - Definitive Edition', 'Halls of Torment']);
+assert.equal(nameVariants('Deep Rock Galactic: Survivor™')[0], 'Deep Rock Galactic: Survivor');
+console.log('parse.test v0.8: ok');

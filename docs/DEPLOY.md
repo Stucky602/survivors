@@ -21,6 +21,12 @@ ALTER TABLE kevin ADD COLUMN want INTEGER DEFAULT 0; ALTER TABLE kevin ADD COLUM
 
 Run it before pushing the v0.2 code. The worker reads those columns on every page.
 
+For v0.8, paste this:
+
+```
+ALTER TABLE games ADD COLUMN review_hours_median INTEGER; ALTER TABLE games ADD COLUMN players_now INTEGER; ALTER TABLE games ADD COLUMN players_at TEXT;
+```
+
 For v0.6.1, paste this:
 
 ```
@@ -72,6 +78,10 @@ On the site:
 - `discover` returns 0 with no error: Steam changed its search HTML. `worker/lib/steam.js` `parseSearchHtml` needs a new pattern.
 - Home shows "Can't reach the worker": the deploy is mid-flight or failed; check the build log.
 
+
+## Variables vs the config file
+
+`wrangler.jsonc` has `keep_vars: true`, so a variable you change in the dashboard (PLAN, BATCH_LIMIT, AI_MODEL) keeps its value across deploys. Secrets were always kept. Without that flag every push resets variables to the file's values.
 
 ## Optional paid switches (v0.7)
 

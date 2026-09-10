@@ -4,6 +4,8 @@ import { CATEGORY_LABEL, Price } from '../components/GameTable.jsx';
 import Sparkline from '../components/Sparkline.jsx';
 import XpBar from '../components/XpBar.jsx';
 import Ps5Plan, { PLAN_LABEL } from '../components/Ps5Plan.jsx';
+import Radar from '../components/Radar.jsx';
+import { useBurst } from '../components/Burst.jsx';
 import { FACET_KEYS_INT, scoreBreakdown, dealVerdict, VERDICTS, DEFAULT_SETTINGS } from '../../shared/score.js';
 
 const LABEL = {
@@ -18,6 +20,7 @@ export default function Game({ appid, meta }) {
   const [busy, setBusy] = useState('');
   const [ppidIn, setPpidIn] = useState('');
   const [planEdit, setPlanEdit] = useState(null);
+  const [burst, burstNode] = useBurst();
   const load = () => api(`/game/${appid}`).then(setD).catch((e) => setErr(e.message));
   useEffect(() => { load(); }, [appid]);
   if (err) return <p className="bar warn">{err}</p>;
@@ -69,7 +72,8 @@ export default function Game({ appid, meta }) {
           {f && f.fit_summary ? <p>{f.fit_summary}</p> : null}
           {f && f.why_not_perfect ? <p><b>Why not perfect:</b> {f.why_not_perfect}</p> : null}
           <div className="actions">
-            {admin && <button onClick={() => flag({ want: !g.want })} disabled={!!busy}>{g.want ? 'Stop wanting' : 'Want this'}</button>}
+            {admin && <button onClick={(e) => { if (!g.want) burst(e); flag({ want: !g.want }); }} disabled={!!busy}>{g.want ? 'Stop wanting' : 'Want this'}</button>}
+            {burstNode}
             {admin && <button onClick={() => flag({ owned: !g.owned })} disabled={!!busy}>{g.owned ? 'Unmark owned' : 'Mark owned'}</button>}
             {admin && <button onClick={() => flag({ never: !g.never })} disabled={!!busy}>{g.never ? 'Allow again' : 'Never recommend'}</button>}
             <button onClick={toggleCompare}>{inCmp ? 'Remove from compare' : 'Add to compare'}</button>
@@ -150,6 +154,7 @@ export default function Game({ appid, meta }) {
           {f ? (
             <>
               <p className="muted">{g.confirmed ? 'Confirmed by Kevin' : 'First pass by the model'}{g.needs_review ? ', waiting for review' : ''}, tagged {fmtDate(g.tagged_at)}, confidence {f.confidence}</p>
+              <div className="radar-wrap"><Radar facets={f} /></div>
               <h3>Where the {g.score} comes from</h3>
               <table className="plain breakdown">
                 <tbody>

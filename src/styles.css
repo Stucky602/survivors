@@ -208,3 +208,49 @@ table.games td:nth-child(3) a { font-weight: 600; }
 .progress-fill { height: 100%; background: var(--gem); box-shadow: 0 0 8px rgba(79,195,255,0.5); transition: width .6s steps(12); }
 .progress-text { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 13px; margin-top: 6px; font-family: var(--display); font-size: 10px; }
 .progress-text .muted { font-family: var(--body); font-size: 13px; }
+
+/* v0.8: scope switch, tiers, radar, roll, burst, timeline */
+.scope { display: inline-flex; border: 1px solid var(--wall); }
+.scope button { border: 0; border-right: 1px solid var(--wall); padding: 7px 14px; }
+.scope button:last-child { border-right: 0; }
+.scope button.on { background: var(--gold); color: var(--night); }
+.tier { display: grid; grid-template-columns: 84px 1fr; border: 2px solid var(--wall); margin: 8px 0; background: var(--stone); }
+.tier-label { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 8px 4px; border-right: 2px solid var(--wall); font-family: var(--display); }
+.tier-letter { font-size: 28px; line-height: 1; }
+.tier-hint { font-size: 8px; color: var(--ash); margin-top: 6px; text-align: center; }
+.tier-S .tier-label { color: var(--gold); background: rgba(245,197,66,0.10); }
+.tier-A .tier-label { color: var(--gem); background: rgba(79,195,255,0.10); }
+.tier-B .tier-label { color: var(--moss); }
+.tier-C .tier-label { color: var(--bone); }
+.tier-D .tier-label { color: var(--ash); }
+.tier-F .tier-label { color: var(--blood); }
+.tier-tiles { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; min-height: 60px; align-items: flex-start; }
+.tile { position: relative; display: block; width: 120px; height: 56px; overflow: hidden; border: 1px solid var(--wall); background: var(--wall); }
+.tile img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.tile:hover { border-color: var(--gold); }
+.tile.owned { opacity: .45; }
+.tile.want { border-color: var(--gold); }
+.tile-score { position: absolute; right: 2px; bottom: 2px; font-family: var(--display); font-size: 10px; color: var(--bone); background: rgba(18,16,26,0.85); padding: 0 4px; }
+.tile-blank { display: flex; align-items: center; justify-content: center; height: 100%; font-size: 11px; padding: 4px; text-align: center; color: var(--ash); }
+.tier-empty { padding: 12px 4px; font-size: 13px; }
+.radar { display: block; margin: 4px 0 8px; }
+.radar-wrap { display: flex; justify-content: center; background: var(--stone); border: 1px solid var(--wall); padding: 6px; margin-bottom: 8px; }
+.roll { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+.roll-reel { width: 260px; }
+.roll-card { display: block; background: var(--stone); border: 2px solid var(--wall); color: var(--bone); padding-bottom: 10px; }
+.roll-card img, .roll-card .pick-blank { display: block; width: 100%; aspect-ratio: 460 / 215; object-fit: cover; }
+.roll-card.spinning { border-color: var(--gold); }
+.roll-card.spinning img { filter: brightness(1.15) contrast(1.1); }
+.roll-card .xp, .roll-card .pick-price { margin: 6px 10px 0; display: block; }
+.roll-name { padding: 8px 10px 0; font-weight: 600; min-height: 32px; }
+.roll p { max-width: 36ch; }
+.burst { position: fixed; z-index: 20; pointer-events: none; width: 0; height: 0; }
+.burst i { position: absolute; left: -3px; top: -3px; width: 6px; height: 6px; background: var(--gold); box-shadow: 0 0 6px var(--gold); animation: burst .8s steps(10) forwards; transform: rotate(var(--a)); }
+@keyframes burst { 0% { transform: rotate(var(--a)) translateX(0); opacity: 1; } 100% { transform: rotate(var(--a)) translateX(var(--d)); opacity: 0; } }
+.timeline { display: block; max-width: 720px; background: var(--stone); border: 1px solid var(--wall); }
+@media (max-width: 720px) {
+  .tier { grid-template-columns: 56px 1fr; }
+  .tier-letter { font-size: 20px; }
+  .tile { width: 92px; height: 43px; }
+  .scope button { padding: 7px 9px; }
+}

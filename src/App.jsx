@@ -3,6 +3,7 @@ import Home from './pages/Home.jsx';
 import Compare from './pages/Compare.jsx';
 import Upcoming from './pages/Upcoming.jsx';
 import OnSteam from './pages/OnSteam.jsx';
+import Tiers from './pages/Tiers.jsx';
 import OnSale from './pages/OnSale.jsx';
 import Browse from './pages/Browse.jsx';
 import Game from './pages/Game.jsx';
@@ -17,6 +18,7 @@ const ROUTES = [
   ['sale', 'On sale'],
   ['upcoming', 'Upcoming'],
   ['onsteam', 'On Steam'],
+  ['tiers', 'Tiers'],
   ['queue', 'Queue'],
   ['settings', 'Settings']
 ];
@@ -44,6 +46,7 @@ export default function App() {
   else if (page === 'compare') body = <Compare ids={(arg || '').split(',').map(Number).filter(Boolean)} meta={meta} />;
   else if (page === 'upcoming') body = <Upcoming meta={meta} />;
   else if (page === 'onsteam') body = <OnSteam meta={meta} />;
+  else if (page === 'tiers') body = <Tiers meta={meta} />;
   else if (page === 'sale') body = <OnSale meta={meta} />;
   else if (page === 'game') body = <Game appid={Number(arg)} meta={meta} />;
   else if (page === 'queue') body = <Queue meta={meta} onChange={reloadMeta} />;

@@ -8,10 +8,19 @@ import { computeQuality, scoreGame, categorize, needsReview, normalizeFacets, no
 
 // PLAN=free keeps every stage under Cloudflare's 50-subrequest-per-invocation cap. PLAN=paid (Workers Paid, 1,000) runs big.
 export const isPaid = (env) => String(env.PLAN || 'free').toLowerCase() === 'paid';
-const limitOf = (env, override) => Math.max(1, Math.min(isPaid(env) ? 400 : 200, Number(override) || Number(env.BATCH_LIMIT) || (isPaid(env) ? 60 : 12)));
+// On Paid the batch is BATCH_LIMIT_PAID (default 100); BATCH_LIMIT only applies on Free so a stale "12" cannot throttle a paid account.
+const limitOf = (env, override) => {
+  const paid = isPaid(env);
+  const base = paid ? (Number(env.BATCH_LIMIT_PAID) || 100) : (Number(env.BATCH_LIMIT) || 12);
+  return Math.max(1, Math.min(paid ? 400 : 200, Number(override) || base));
+};
+// Scope: which games a run touches. 'all' | 'available' (out on Steam or PSN) | 'upcoming' (not out anywhere).
+export const SCOPES = ['all', 'available', 'upcoming'];
+export const scopeSql = (scope, g = 'g') => scope === 'available' ? ` AND COALESCE(${g}.coming_soon,0) = 0` : scope === 'upcoming' ? ` AND ${g}.coming_soon = 1` : '';
+const scopeOf = (opts) => (SCOPES.includes(opts && opts.scope) ? opts.scope : 'all');
 // A stage stops taking new items after this long so a slow upstream never runs a cron tick into the wall.
-const TIME_BUDGET_MS = 40000; // wall-clock; Free CPU is 10 ms but fetch waits are free, Paid is 30 s CPU
-const budgetClock = () => { const t0 = Date.now(); return () => Date.now() - t0 > TIME_BUDGET_MS; };
+const timeBudget = (env) => (isPaid(env) ? 150000 : 40000); // wall-clock per batch
+const budgetClock = (env) => { const t0 = Date.now(); const lim = timeBudget(env); return () => Date.now() - t0 > lim; };
 const MAX_ERRORS = 5;
 // Workers AI free allocation resets at 00:00 UTC. When a stage hits it, park the AI stages until then.
 const nextUtcMidnight = () => { const d = new Date(); d.setUTCHours(24, 0, 0, 0); return d.toISOString(); };
@@ -53,7 +62,7 @@ export async function discover(env, opts = {}) {
       for (const it of items) if (await upsertGameFromSteamSearch(env.DB, { ...it, source: `tag:${t.name}` })) added++;
       const lastPage = items.length < 50 || (pg + 1) * 50 >= total;
       if (lastPage) { ti++; pg = 0; } else { pg++; }
-      if (pagesThisRun < PAGES_PER_RUN) await steam.pause(250);
+      if (pagesThisRun < PAGES_PER_RUN) await steam.pause(isPaid(env) ? 120 : 250);
     }
     if (ti >= tags.length) { done = true; ti = 0; pg = 0; }
     await setSetting(env.DB, 'discover_cursor', { tag: ti, page: pg });
@@ -66,18 +75,18 @@ export async function discover(env, opts = {}) {
 
 // 2. Enrich: appdetails + reviews + tag votes for new games, and games not enriched in 7 days.
 // 3 Steam fetches per game, so the batch is capped hard at 12 to stay under the 50-subrequest invocation limit.
-const enrichMax = (env) => (isPaid(env) ? 150 : 10); // 4 fetches per game: 40 on Free, 600 on Paid
+const enrichMax = (env) => (isPaid(env) ? 120 : 9); // 5 fetches per game: 45 on Free, 600 on Paid
 export async function enrich(env, opts = {}) {
   return withRun(env.DB, 'enrich', async () => {
     const limit = Math.min(enrichMax(env), limitOf(env, opts.limit));
     const { results } = await env.DB.prepare(
       `SELECT g.appid FROM games g LEFT JOIN steam_cache c ON c.appid = g.appid
        WHERE (g.status = 'new' OR (g.status = 'error' AND COALESCE(g.error_count,0) < ${MAX_ERRORS} AND (g.last_enriched IS NULL OR g.last_enriched < ?))
-              OR (g.status = 'enriched' AND (g.last_enriched IS NULL OR g.last_enriched < ? OR c.news_json IS NULL)))
+              OR (g.status = 'enriched' AND (g.last_enriched IS NULL OR g.last_enriched < ? OR c.news_json IS NULL)${scopeSql(scopeOf(opts))}))
        ORDER BY CASE g.status WHEN 'new' THEN 0 WHEN 'error' THEN 1 ELSE 2 END, (c.news_json IS NULL) DESC, g.last_enriched LIMIT ?`
     ).bind(daysFromNow(-1 / 24), daysFromNow(-7), limit).all();
     let n = 0;
-    const over = budgetClock();
+    const over = budgetClock(env);
     for (const { appid } of results) {
       if (over()) break;
       try {
@@ -87,17 +96,22 @@ export async function enrich(env, opts = {}) {
         const r = await steam.appReviews(appid).catch(() => null);
         const tv = await steam.tagVotes(appid);
         const news = await steam.appNews(appid);
+        const players = await steam.currentPlayers(appid);
+        const hoursList = (r?.reviews || []).map((x) => (x.author?.playtime_forever || 0) / 60).filter((h) => h > 0).sort((a, b) => a - b);
+        const hoursMedian = hoursList.length ? Math.round(hoursList[Math.floor(hoursList.length / 2)]) : null;
         const qs = (r && r.query_summary) || {};
         const genres = (d.genres || []).map((g) => g.description);
         const ea = genres.includes('Early Access') ? 1 : 0;
         const tagVotes = tv ? (tv.find((t) => /bullet heaven/i.test(t.name))?.count ?? 0) : null;
         await env.DB.prepare(
           `UPDATE games SET name = ?, steam_release = ?, coming_soon = ?, developer = ?, publisher = ?, header_img = ?, early_access = ?,
-             status = 'enriched', tag_votes = ?, steam_pos = ?, steam_neg = ?, steam_score_desc = ?, last_enriched = ?, last_error = NULL, error_count = 0 WHERE appid = ?`
+             status = 'enriched', tag_votes = ?, steam_pos = ?, steam_neg = ?, steam_score_desc = ?, last_enriched = ?, last_error = NULL, error_count = 0,
+             review_hours_median = ?, players_now = COALESCE(?, players_now), players_at = CASE WHEN ? IS NULL THEN players_at ELSE ? END WHERE appid = ?`
         ).bind(
           d.name || `app ${appid}`, d.release_date?.date || null, d.release_date?.coming_soon ? 1 : 0,
           (d.developers || []).join(', ') || null, (d.publishers || []).join(', ') || null, d.header_image || null, ea,
-          tagVotes, qs.total_positive ?? null, qs.total_negative ?? null, qs.review_score_desc || null, now(), appid
+          tagVotes, qs.total_positive ?? null, qs.total_negative ?? null, qs.review_score_desc || null, now(),
+          hoursMedian, players, players, now(), appid
         ).run();
         const slim = {
           name: d.name, short_description: d.short_description, about: steam.stripHtml(d.about_the_game || d.detailed_description),
@@ -112,7 +126,7 @@ export async function enrich(env, opts = {}) {
         // News changed since the last plan read: let the plans stage look again.
         await env.DB.prepare(`UPDATE games SET ps5_plan_at = NULL WHERE appid = ? AND ps5_plan IS NOT NULL AND ps5_plan NOT IN ('announced_date') AND ps5_plan_at < ?`).bind(appid, daysFromNow(-30)).run();
         n++;
-        await steam.pause(300);
+        await steam.pause(isPaid(env) ? 120 : 300);
       } catch (e) {
         await env.DB.prepare(`UPDATE games SET status = 'error', last_error = ?, last_enriched = ?, error_count = COALESCE(error_count,0) + 1 WHERE appid = ?`).bind(String(e.message || e).slice(0, 300), now(), appid).run();
         if (/rate-limited/.test(String(e.message))) { await steam.pause(5000); }
@@ -122,6 +136,18 @@ export async function enrich(env, opts = {}) {
   });
 }
 
+// Name variants for the PlatPrices search, most specific first. Console listings drop subtitles and add edition words.
+export function nameVariants(name) {
+  const clean = (x) => x.replace(/[™®©]/g, '').replace(/\s+/g, ' ').trim();
+  const full = clean(name);
+  const out = [full];
+  const head = clean(full.split(/\s*[:\u2013\u2014-]\s+/)[0]);
+  if (head && head.length >= 4 && head.toLowerCase() !== full.toLowerCase()) out.push(head);
+  const stripped = clean(full.replace(/\b(complete|definitive|ultimate|deluxe|goty|game of the year|anniversary|remastered|enhanced|console|special|gold|premium|standard)\b\s*(edition)?/gi, '').replace(/\s*[:\u2013\u2014-]\s*$/, ''));
+  if (stripped && stripped.length >= 4 && !out.some((o) => o.toLowerCase() === stripped.toLowerCase())) out.push(stripped);
+  return out.slice(0, 3);
+}
+
 // 3. Match: find the PSN listing for enriched, unmatched games.
 export async function match(env, opts = {}) {
   return withRun(env.DB, 'match', async () => {
@@ -129,16 +155,21 @@ export async function match(env, opts = {}) {
     const { results } = await env.DB.prepare(
       `SELECT g.appid, g.name, g.developer, g.publisher, g.steam_release FROM games g
        WHERE g.status = 'enriched' AND g.psn_status IN ('unmatched','not_listed') AND g.ppid IS NULL
-         AND (g.next_match_at IS NULL OR g.next_match_at <= ?)
+         AND (g.next_match_at IS NULL OR g.next_match_at <= ?)${scopeSql(scopeOf(opts))}
        ORDER BY g.psn_status = 'unmatched' DESC, g.first_seen LIMIT ?`
     ).bind(now(), limit).all();
     let n = 0, skipped = 0;
-    const over = budgetClock();
+    const over = budgetClock(env);
     for (const g of results) {
       if (over()) break;
       if (!(await canSpend(env.DB, 1))) { skipped++; continue; }
       try {
-        const cands = (await pp.searchGames(env, g.name)).filter((c) => Number(c.IsDLC) !== 1 && Number(c.IsDemoOrSoundtrack) !== 1);
+        let cands = [];
+        for (const q of nameVariants(g.name)) {
+          if (cands.length) break;
+          if (!(await canSpend(env.DB, 1))) break;
+          cands = (await pp.searchGames(env, q)).filter((c) => Number(c.IsDLC) !== 1 && Number(c.IsDemoOrSoundtrack) !== 1);
+        }
         if (!cands.length) {
           await env.DB.prepare(`UPDATE games SET psn_status = 'not_listed', next_match_at = ? WHERE appid = ?`).bind(daysFromNow(7), g.appid).run();
           n++; continue;
@@ -213,11 +244,11 @@ export async function tag(env, opts = {}) {
               f.appid AS has_facets, f.reviews_at_tag, f.confirmed_by
        FROM games g LEFT JOIN steam_cache c ON c.appid = g.appid LEFT JOIN psn_products p ON p.ppid = g.ppid LEFT JOIN facets f ON f.appid = g.appid
        WHERE g.status = 'enriched' AND c.appdetails_json IS NOT NULL
-         AND (f.appid IS NULL OR (f.confirmed_by IS NULL AND COALESCE(g.steam_pos,0)+COALESCE(g.steam_neg,0) >= 2 * COALESCE(f.reviews_at_tag, 0) + 20))
+         AND (f.appid IS NULL OR (f.confirmed_by IS NULL AND COALESCE(g.steam_pos,0)+COALESCE(g.steam_neg,0) >= 2 * COALESCE(f.reviews_at_tag, 0) + 20))${scopeSql(scopeOf(opts))}
        ORDER BY g.psn_status = 'matched' DESC, COALESCE(g.steam_pos,0) DESC LIMIT ?`
     ).bind(limit).all();
     let n = 0;
-    const over = budgetClock();
+    const over = budgetClock(env);
     for (const g of results) {
       if (over()) break;
       try {
@@ -273,11 +304,11 @@ export async function plans(env, opts = {}) {
     const limit = limitOf(env, opts.limit);
     const { results } = await env.DB.prepare(
       `SELECT g.appid, g.name, c.appdetails_json, c.news_json FROM games g JOIN steam_cache c ON c.appid = g.appid
-       WHERE g.status = 'enriched' AND g.ppid IS NULL AND c.news_json IS NOT NULL AND g.ps5_plan_at IS NULL
+       WHERE g.status = 'enriched' AND g.ppid IS NULL AND c.news_json IS NOT NULL AND g.ps5_plan_at IS NULL${scopeSql(scopeOf(opts))}
        ORDER BY COALESCE(g.steam_pos,0) DESC LIMIT ?`
     ).bind(limit).all();
     let n = 0;
-    const over = budgetClock();
+    const over = budgetClock(env);
     for (const g of results) {
       if (over()) break;
       try {
@@ -309,6 +340,15 @@ export async function retag(env) {
   return withRun(env.DB, 'retag', async () => {
     const r = await env.DB.prepare(`UPDATE facets SET reviews_at_tag = -100000, needs_review = 0 WHERE confirmed_by IS NULL`).run();
     return { count: r.meta.changes, note: 'queued for re-tag; the Runner picks them up' };
+  });
+}
+
+// Re-queue every "not listed" game for another match pass (after the search got smarter, or a port shipped).
+export async function rematch(env) {
+  return withRun(env.DB, 'rematch', async () => {
+    const r = await env.DB.prepare(`UPDATE games SET next_match_at = NULL WHERE psn_status = 'not_listed' AND ppid IS NULL`).run();
+    await setSetting(env.DB, 'rematch_done_v1', true);
+    return { count: r.meta.changes, note: 'queued for re-match; the Runner picks them up' };
   });
 }
 
@@ -345,4 +385,4 @@ export async function rescore(env) {
   });
 }
 
-export const STAGES = { discover, enrich, match, refresh, tag, plans, rescore, retag, 'retry-errors': retryErrors };
+export const STAGES = { discover, enrich, match, refresh, tag, plans, rescore, retag, rematch, 'retry-errors': retryErrors };

@@ -61,6 +61,7 @@ export default function GameTable({ games, columns = ['score', 'category', 'pric
                 <div className="sub">
                   {g.developer || ''}
                   {g.facets ? <>{g.developer ? ', ' : ''}{g.facets.combat_class.replace(/_/g, ' ')}{g.facets.hub_type === 'authored' ? ', authored hub' : ''}{g.facets.prestige ? ', prestige' : ''}{g.facets.run_length_minutes ? `, ${g.facets.run_length_minutes} min runs` : ''}</> : null}
+                  {g.hours_median != null ? <span className="muted">{g.developer || g.facets ? ', ' : ''}~{g.hours_median}h per reviewer</span> : null}
                 </div>
               </td>
               {has('category') && <td>{g.category ? CATEGORY_LABEL[g.category] || g.category : <span className="muted">untagged</span>}</td>}

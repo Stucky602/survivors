@@ -3,6 +3,7 @@ import { api, getLocalTaste, setCompare } from '../api.js';
 import { Price, CATEGORY_LABEL } from '../components/GameTable.jsx';
 import { scoreBreakdown, FACET_KEYS_INT, DEFAULT_SETTINGS } from '../../shared/score.js';
 import XpBar from '../components/XpBar.jsx';
+import Radar from '../components/Radar.jsx';
 
 const ROWS = [
   ['combat_class', 'Combat class'], ['hub_type', 'Hub type'], ['perspective', 'Perspective'], ['auto_fire', 'Auto-fire'],
@@ -36,11 +37,12 @@ export default function Compare({ ids, meta }) {
   return (
     <>
       <h1>Compare</h1>
-      <p className="muted"><a href="#/browse">Change selection</a>, <a href="#/compare" onClick={() => setCompare([])}>Clear</a></p>
+      <p className="muted"><a href="#/browse">Change selection</a>, <a href="#/compare" onClick={() => setCompare([])}>Clear</a>. On the stat wheels, blue is that game and red is the first game for reference.</p>
       <table className="compare">
         <thead><tr><th></th>{games.map((g) => <th key={g.appid}><a href={`#/game/${g.appid}`}>{g.name}</a></th>)}</tr></thead>
         <tbody>
           <tr><td>Cover</td>{games.map((g) => <td key={g.appid}>{g.header_img ? <img src={g.header_img} alt="" width="184" height="86" /> : null}</td>)}</tr>
+          <tr><td>Stat wheel</td>{games.map((g, i) => <td key={g.appid}>{g.facets ? <Radar facets={g.facets} other={i > 0 && games[0].facets ? games[0].facets : null} size={190} /> : <span className="muted">untagged</span>}</td>)}</tr>
           <tr><td>Score</td>{games.map((g) => <td key={g.appid}><XpBar score={g.score} size="card" /> {g.category ? <span className="muted">{CATEGORY_LABEL[g.category]}</span> : null}</td>)}</tr>
           <tr><td>PS Store</td>{games.map((g) => <td key={g.appid}><Price g={g} /></td>)}</tr>
           <tr><td>PS rating</td>{games.map((g) => <td key={g.appid}>{g.psn && g.psn.star_rating ? `${Number(g.psn.star_rating).toFixed(2)} (${g.psn.star_count})` : '–'}</td>)}</tr>

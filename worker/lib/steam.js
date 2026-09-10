@@ -56,6 +56,15 @@ export async function appNews(appid, count = 12) {
   } catch { return null; }
 }
 
+// Players online right now. Free, keyless. An abandoned game reads 0 to 5; a healthy one reads hundreds.
+export async function currentPlayers(appid) {
+  try {
+    const j = await getJSON(`https://api.steampowered.com/ISteamUserStats/GetNumberOfCurrentPlayers/v1/?appid=${appid}`);
+    const r = j && j.response;
+    return r && r.result === 1 && typeof r.player_count === 'number' ? r.player_count : null;
+  } catch { return null; }
+}
+
 // Tag vote counts are embedded in the store page as InitAppTagModal( appid, [ {tagid,name,count}, ... ] ).
 export function parseTagVotes(html) {
   const m = /InitAppTagModal\(\s*\d+\s*,\s*(\[[\s\S]*?\])\s*,/.exec(html);

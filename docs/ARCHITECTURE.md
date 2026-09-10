@@ -1,6 +1,6 @@
 # Survivors-like PSN tracker: architecture v0.1
 
-Status: v0.7 built Sep 10 2026. Sections 1 to 6 describe what is in the repo; sections 9 to 11 list what v0.2 to v0.4 added.
+Status: v0.8 built Sep 10 2026. Sections 1 to 6 describe what is in the repo; sections 9 to 11 list what v0.2 to v0.4 added.
 Decisions already made in chat: public site, one real user, $0/month, hybrid tagging (AI first pass, Kevin confirms high scorers), hub is both a filter and a weight.
 
 ## 1. What the site does
@@ -298,3 +298,21 @@ Both optional, both behind a single dashboard setting, nothing changes if neithe
 **`PLAN` variable, `free` (default) or `paid`.** Every batch size and the discover page count derive from it. On Workers Paid the subrequest cap is 1,000 per invocation and CPU is 30 s, so: enrich 150 games per batch (600 fetches), discover 40 pages, default batch 60 for match/tag/plans, Runner ticks every 8 s instead of 45. The 700-game backfill goes from a day of ticks to minutes. Workers AI above the free 10,000 neurons/day bills at $0.011 per 1,000 neurons on Paid, so tag stops stalling at the cap.
 
 **`ANTHROPIC_API_KEY` secret (optional) with `CLAUDE_MODEL` (default `claude-haiku-4-5`).** When set, the tag step calls Claude's Messages API instead of Workers AI; match and plans stay on the 8B Workers AI model. One subrequest per game, so it works on Free too. Claude API errors are reported as `claude <status>` and never mark the Workers AI allocation as capped; a 401/402/403/429 stops the batch with the reason in the note. Haiku 4.5 is $1 per million input and $5 per million output tokens; a tag call is roughly 6K in and 600 out, so around a cent per game, a few dollars for the full backfill, then pennies a month.
+
+
+## 15. v0.8: scopes, the paid fix, editions, and the fun bundle (Sep 10)
+
+**Paid sizing fix.** `BATCH_LIMIT` now applies only on Free; Paid reads `BATCH_LIMIT_PAID` (default 100), so a stale free-plan value in the dashboard cannot throttle a paid account. Enrich 120 per batch on Paid (5 fetches per game), time budget 150 s per batch, Steam pauses 120 ms, Runner ticks 8 s.
+
+**Scopes.** `all` | `available` (`coming_soon = 0`) | `upcoming` (`coming_soon = 1`). A segmented switch at the top of Queue, remembered per device, sent with Run everything and every stage button. The Runner stores the scope it started with and reports it; pending counts and the progress bar respect it. Newly discovered games (no `coming_soon` yet) are enriched under every scope, then classified.
+
+**Editions trap.** Kevin's catch: "Nordic Ashes: Survivors of Ragnarok" is "Nordic Ashes: Complete Edition" on PSN and the literal search missed it. `nameVariants()` tries the full title, then the part before a colon or dash, then with edition words stripped. The match prompt now treats Complete/Definitive/Ultimate/Deluxe/GOTY/Console editions as the same game when no standard edition exists. A one-time `rematch` sweep re-queues every "not listed" game on the first Runner tick after deploy; the button on Queue does it again any time.
+
+**What a picky fan wants (the research).** What people are actually shipping with Fable 5.x on the web: everything procedural and in code (no image assets), single-file three.js + GLSL scenes, canvas-drawn textures, animations that carry the eye somewhere. The lesson taken for a data site: draw it, don't load it. Everything below is SVG, canvas, or CSS, no assets.
+
+- **Tier list** page: S/A/B/C/D by score, F for gate rejections, cover tiles with the number on hover, owned tiles dimmed, wanted tiles gold. The most genre-native way to see a catalog.
+- **Stat wheel** (8-axis radar) on every game page and on Compare, where each game's wheel overlays the first game in red.
+- **Roll a pick** on Home: a slot reel over unowned PS Store games scoring 55+, weighted toward higher scores, slows and lands.
+- **Playtime**: median hours of the 20 most helpful Steam reviewers, and cost per hour at today's PS price. **Playing now**: Steam concurrent players (keyless), with "quiet" under 5 and "busy" over 500. Both from enrich (migration 0006).
+- **The genre by quarter**: a bar chart of tracked games by Steam release date, blue for the share on the PS Store.
+- The horde follows the pointer or finger; XP bars fill in on load; "Want this" fires a coin burst.

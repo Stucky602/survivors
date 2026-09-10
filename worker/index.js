@@ -20,7 +20,8 @@ const GAME_SELECT = `
          p.star_rating, p.star_count, p.psp_extra, p.psp_premium, p.lowest_ever, p.lowest_seen, p.release_date AS psn_release, p.refreshed_at,
          f.facets_json, f.evidence_json, f.proposed_json, f.score, f.category, f.confirmed_by, f.needs_review, f.tagged_at, f.model,
          k.owned, k.never, k.note, k.want, k.want_price, k.want_at, k.verdict, g.matched_at,
-         g.ps5_plan, g.ps5_plan_date, g.ps5_plan_window, g.ps5_plan_note, g.ps5_plan_platform, g.ps5_plan_at
+         g.ps5_plan, g.ps5_plan_date, g.ps5_plan_window, g.ps5_plan_note, g.ps5_plan_platform, g.ps5_plan_at,
+         g.review_hours_median, g.players_now, g.players_at
   FROM games g
   LEFT JOIN psn_products p ON p.ppid = g.ppid
   LEFT JOIN facets f ON f.appid = g.appid
@@ -44,6 +45,7 @@ function rowToGame(r, full = false) {
     } : null,
     facets, score: r.score, category: r.category, confirmed: !!r.confirmed_by, needs_review: !!r.needs_review, tagged_at: r.tagged_at,
     owned: !!r.owned, never: !!r.never, note: r.note || '', want: !!r.want, want_price: r.want_price, want_at: r.want_at, verdict: r.verdict || null, matched_at: r.matched_at,
+    hours_median: r.review_hours_median, players_now: r.players_now, players_at: r.players_at,
     ps5_plan: r.ps5_plan_at ? { status: r.ps5_plan || 'unknown', platform: r.ps5_plan_platform || 'unspecified', date: r.ps5_plan_date, window: r.ps5_plan_window, note: r.ps5_plan_note, at: r.ps5_plan_at } : null
   };
   if (full) {
@@ -116,7 +118,9 @@ async function handleApi(request, env, ctx) {
     const wanted = await q(`k.want = 1`, 'p.is_on_sale DESC, COALESCE(f.score,-1) DESC', 50);
     const picks = await q(`g.psn_status = 'matched' AND COALESCE(p.is_delisted,0) = 0 AND COALESCE(k.owned,0) = 0 AND COALESCE(k.never,0) = 0 AND f.score IS NOT NULL AND f.category != 'do_not_recommend'`, 'f.score DESC', 8);
     const drops = await q(`k.want = 1 AND k.want_price IS NOT NULL AND p.sale_price < k.want_price AND ${live}`, 'p.sale_price', 20);
-    return json({ since, ending, newSales, newOnPsn, releasing, wanted, picks, drops });
+    const rel = (await env.DB.prepare(`SELECT steam_release, psn_status FROM games WHERE status = 'enriched' AND steam_release IS NOT NULL`).all()).results;
+    const rollPool = await q(`g.psn_status = 'matched' AND COALESCE(p.is_delisted,0) = 0 AND COALESCE(k.owned,0) = 0 AND COALESCE(k.never,0) = 0 AND f.score >= 55`, 'f.score DESC', 60);
+    return json({ since, ending, newSales, newOnPsn, releasing, wanted, picks, drops, releases: rel, rollPool });
   }
 
   // Everything below is admin.
@@ -136,7 +140,8 @@ async function handleApi(request, env, ctx) {
   if (/^\/admin\/runner\/(start|stop|status)$/.test(path)) {
     if (!env.RUNNER) return bad('runner binding not configured', 501);
     const id = env.RUNNER.idFromName('main');
-    const r = await env.RUNNER.get(id).fetch(new Request(`https://runner${path}`));
+    const scope = ['all', 'available', 'upcoming'].includes(body.scope) ? body.scope : 'all';
+    const r = await env.RUNNER.get(id).fetch(new Request(`https://runner${path}?scope=${scope}`));
     const d = await r.json();
     if (path.endsWith('status')) { d.pending = await pickStage(env); d.ai_capped_until = (await aiCapped(env)) ? await getSetting(env.DB, 'ai_capped_until', null) : null; }
     return json(d);

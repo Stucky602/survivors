@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { api, getToken } from '../api.js';
 import FacetEditor from '../components/FacetEditor.jsx';
 
+const SCOPES = [['all', 'Everything', 'every tracked game'], ['available', 'Available now', 'released on Steam or the PS Store'], ['upcoming', 'Upcoming', 'not out anywhere yet']];
+
 const STAGES = ['discover', 'enrich', 'match', 'refresh', 'tag', 'plans', 'rescore'];
 const LABEL = { discover: 'Discover', enrich: 'Enrich', match: 'Match', refresh: 'Refresh', tag: 'Tag', plans: 'PS Store plans', rescore: 'Rescore' };
 
@@ -13,6 +15,8 @@ export default function Queue({ meta, onChange }) {
   const [open, setOpen] = useState(null);
   const [single, setSingle] = useState(null);
   const [runner, setRunner] = useState(null);
+  const [scope, setScopeState] = useState(localStorage.getItem('survivors.scope') || 'all');
+  const setScope = (v) => { setScopeState(v); localStorage.setItem('survivors.scope', v); };
   const hashArg = location.hash.split('/')[2];
   const runnerStatus = () => api('/admin/runner/status', { admin: true }).then(setRunner).catch(() => setRunner({ unavailable: true }));
   useEffect(() => {
@@ -23,7 +27,7 @@ export default function Queue({ meta, onChange }) {
     return () => { clearInterval(t); clearInterval(t2); };
   }, []);
   const fmtEta = (sec) => sec == null ? '' : sec < 90 ? 'about a minute' : sec < 3600 ? `about ${Math.round(sec / 60)} minutes` : `about ${(sec / 3600).toFixed(1)} hours`;
-  const runnerCmd = async (cmd) => { setBusy('runner'); try { await api(`/admin/runner/${cmd}`, { method: 'POST', admin: true, body: {} }); await runnerStatus(); } catch (e) { setErr(e.message); } setBusy(''); };
+  const runnerCmd = async (cmd) => { setBusy('runner'); try { await api(`/admin/runner/${cmd}`, { method: 'POST', admin: true, body: { scope } }); await runnerStatus(); } catch (e) { setErr(e.message); } setBusy(''); };
 
   const load = () => api('/admin/queue', { admin: true }).then(setQ).catch((e) => setErr(e.message));
   useEffect(() => { if (getToken()) load(); }, []);
@@ -36,7 +40,7 @@ export default function Queue({ meta, onChange }) {
     let total = 0, rounds = 0;
     try {
       do {
-        const r = await api(`/admin/run/${stage}`, { method: 'POST', admin: true, body: {} });
+        const r = await api(`/admin/run/${stage}`, { method: 'POST', admin: true, body: { scope } });
         rounds++;
         total += r.count || 0;
         setLog((l) => [`${stage}: ${r.ok ? 'ok' : 'failed'} ${r.count ?? ''} ${r.note || r.error || ''}`, ...l].slice(0, 30));
@@ -60,6 +64,12 @@ export default function Queue({ meta, onChange }) {
       <h1>Queue</h1>
       {err && <p className="bar warn">{err}</p>}
 
+      <h2>Scope</h2>
+      <div className="scope" role="tablist">
+        {SCOPES.map(([k, label, hint]) => <button key={k} role="tab" aria-selected={scope === k} className={scope === k ? 'on' : ''} onClick={() => setScope(k)} title={hint}>{label}</button>)}
+      </div>
+      <p className="muted">Applies to Run everything and to every stage button below. {SCOPES.find(([k]) => k === scope)[2]}.{runner && runner.running && runner.scope !== scope ? ` The Runner is currently going with "${SCOPES.find(([k]) => k === runner.scope)?.[1] || runner.scope}"; stop and start it to switch.` : ''}</p>
+
       <h2>Auto-run</h2>
       {meta && meta.plan ? <p className="muted">Cloudflare plan: {meta.plan}{meta.plan === 'free' ? ' (small batches, 50-fetch cap)' : ' (large batches)'}. Tagging with {meta.tagger}.{meta.counts ? ` ${meta.counts.tagged || 0} games scored, ${meta.counts.tagged_claude || 0} of them by Claude${meta.counts.retag_pending ? `, ${meta.counts.retag_pending} waiting for a re-score` : ''}.` : ''}</p> : null}
       {runner && runner.unavailable ? <p className="bar warn">The Runner isn't deployed yet. Push the latest repo; the deploy creates it.</p> : (
@@ -70,7 +80,7 @@ export default function Queue({ meta, onChange }) {
               ? <button onClick={() => runnerCmd('stop')} disabled={!!busy}>Stop</button>
               : <button className="primary" onClick={() => runnerCmd('start')} disabled={!!busy}>Run everything</button>}
             {runner && <span className="muted">
-              {runner.running ? `Running, batch ${runner.ticks}.` : 'Idle.'}
+              {runner.running ? `Running ${SCOPES.find(([k]) => k === runner.scope)?.[1]?.toLowerCase() || runner.scope}, batch ${runner.ticks}.` : 'Idle.'}
               {runner.ai_capped_until ? ` Today's free AI allocation is used up; tagging and plans resume after ${runner.ai_capped_until.slice(11, 16)} UTC${runner.running ? ' (the Runner wakes itself then)' : ''}.` : runner.pending ? ` Next up: ${runner.pending}.` : runner.running ? '' : ' Nothing pending.'}
               {runner.last && runner.last.stage !== 'idle' ? ` Last: ${runner.last.stage} ${runner.last.ok ? 'ok' : 'failed'} ${runner.last.count}${runner.last.note ? `, ${runner.last.note}` : ''}.` : ''}
             </span>}
@@ -96,6 +106,7 @@ export default function Queue({ meta, onChange }) {
         {STAGES.map((s) => <span key={s} className="pair"><button onClick={() => run(s)} disabled={!!busy}>{busy === s ? `${LABEL[s]}…` : LABEL[s]}</button><button onClick={() => run(s, true)} disabled={!!busy || s === 'refresh' || s === 'rescore'} title="Run until empty">↻</button></span>)}
         <button onClick={() => run('retry-errors')} disabled={!!busy}>Retry errored games</button>
         <button onClick={() => { if (confirm('Queue every unconfirmed game for a fresh tag pass with the current model? Old scores stay until replaced.')) run('retag'); }} disabled={!!busy}>Re-score all with current model</button>
+        <button onClick={() => run('rematch')} disabled={!!busy} title="Re-check every game marked not listed against the PS Store, using the smarter name search">Re-match not listed</button>
       </div>
       {log.length > 0 && <pre className="log">{log.join('\n')}</pre>}
 

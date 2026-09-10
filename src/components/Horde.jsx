@@ -9,6 +9,7 @@ export default function Horde({ height = 150 }) {
     const ctx = c.getContext('2d');
     const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
     let w = 0, h = 0, raf = 0, sprites = [], gems = [];
+    let px_ = null, py_ = null, cxL = 0, cyL = 0;
     const rnd = (a, b) => a + Math.random() * (b - a);
     const resize = () => { w = c.width = c.clientWidth; h = c.height = height; seed(); };
     const seed = () => {
@@ -26,7 +27,7 @@ export default function Horde({ height = 150 }) {
     const px = (x, y, size, col) => { ctx.fillStyle = col; ctx.fillRect(Math.round(x), Math.round(y), size, size); };
     const draw = (t) => {
       ctx.clearRect(0, 0, w, h);
-      const cx = w * 0.5, cy = h * 0.55;
+      const cx = cxL || w * 0.5, cy = cyL || h * 0.55;
       // gems
       for (const g of gems) { const p = 0.6 + 0.4 * Math.sin(t / 400 + g.t); ctx.globalAlpha = p; px(g.x, g.y, 3, '#4fc3ff'); }
       ctx.globalAlpha = 1;
@@ -44,7 +45,10 @@ export default function Horde({ height = 150 }) {
       ctx.beginPath(); ctx.arc(cx, cy, 26 + 4 * Math.cos(t / 250), Math.PI - 0.9, Math.PI + 0.9); ctx.stroke();
     };
     const step = (t) => {
-      const cx = w * 0.5, cy = h * 0.55;
+      // the player drifts toward the pointer when there is one, otherwise sits mid-field
+      const tx = px_ ?? w * 0.5, ty = py_ ?? h * 0.55;
+      cxL = (cxL || tx) + (tx - (cxL || tx)) * 0.08; cyL = (cyL || ty) + (ty - (cyL || ty)) * 0.08;
+      const cx = cxL, cy = cyL;
       for (let i = 0; i < sprites.length; i++) {
         const e = sprites[i];
         const dx = cx - e.x, dy = cy - e.y, d = Math.hypot(dx, dy) || 1;
@@ -59,13 +63,16 @@ export default function Horde({ height = 150 }) {
     const start = () => { if (!paused && !raf) raf = requestAnimationFrame(step); };
     const stop = () => { cancelAnimationFrame(raf); raf = 0; };
     const onVis = () => (document.hidden ? stop() : start());
+    const onMove = (e) => { const r = c.getBoundingClientRect(); const p = e.touches ? e.touches[0] : e; px_ = p.clientX - r.left; py_ = p.clientY - r.top; };
+    const onLeave = () => { px_ = null; py_ = null; };
     const onClick = () => { paused = !paused; localStorage.setItem('survivors.horde', paused ? 'off' : 'on'); if (paused) { stop(); draw(0); } else start(); };
     resize();
     addEventListener('resize', resize);
     document.addEventListener('visibilitychange', onVis);
     c.addEventListener('click', onClick);
+    c.addEventListener('mousemove', onMove); c.addEventListener('touchmove', onMove, { passive: true }); c.addEventListener('mouseleave', onLeave); c.addEventListener('touchend', onLeave);
     if (paused) draw(0); else start();
-    return () => { stop(); removeEventListener('resize', resize); document.removeEventListener('visibilitychange', onVis); c.removeEventListener('click', onClick); };
+    return () => { stop(); removeEventListener('resize', resize); document.removeEventListener('visibilitychange', onVis); c.removeEventListener('click', onClick); c.removeEventListener('mousemove', onMove); c.removeEventListener('touchmove', onMove); c.removeEventListener('mouseleave', onLeave); c.removeEventListener('touchend', onLeave); };
   }, [height]);
-  return <canvas ref={ref} className="horde" style={{ height }} title="Click to pause or resume" aria-hidden="true" />;
+  return <canvas ref={ref} className="horde" style={{ height }} title="Move to steer, click to pause" aria-hidden="true" />;
 }
