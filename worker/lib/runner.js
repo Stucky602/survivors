@@ -1,10 +1,10 @@
 // The Runner: a Durable Object that drains the pipeline one batch per alarm.
 // Each alarm is its own Worker invocation with its own 50-subrequest budget, which is the only way
 // to backfill several hundred games on the free plan without a human clicking a button per batch.
-import { STAGES, aiCapped } from './stages.js';
+import { STAGES, aiCapped, isPaid } from './stages.js';
 import { getSetting, daysFromNow, now } from './db.js';
 
-const TICK_MS = 45000;      // between batches
+const tickMs = (env) => (isPaid(env) ? 8000 : 45000); // between batches
 const MAX_TICKS = 400;      // safety: stops on its own after ~5 hours of continuous work
 const IDLE_NOTE = 'idle';
 
@@ -55,7 +55,7 @@ export class Runner {
     }
     await this.state.storage.put('last', { at: now(), stage: stage || IDLE_NOTE, count: result?.count ?? 0, ok: result?.ok ?? true, note: result?.note || result?.error || null });
     const more = stage && ticks < MAX_TICKS;
-    if (more) await this.state.storage.setAlarm(Date.now() + TICK_MS);
+    if (more) await this.state.storage.setAlarm(Date.now() + tickMs(env));
     else if (await aiCapped(env)) {
       // Wake again just after the allocation resets so the backfill continues without anyone pressing anything.
       const d = new Date(); d.setUTCHours(24, 5, 0, 0);

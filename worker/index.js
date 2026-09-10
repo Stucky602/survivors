@@ -95,7 +95,7 @@ async function handleApi(request, env, ctx) {
     ).first();
     const lastRefresh = await env.DB.prepare('SELECT MAX(refreshed_at) AS t FROM psn_products').first();
     const ageH = lastRefresh?.t ? (Date.now() - Date.parse(lastRefresh.t)) / 36e5 : null;
-    return json({ taste, counts, runs: await lastRuns(env.DB), budget: await readBudget(env.DB), last_refresh: lastRefresh?.t || null, prices_stale: ageH != null && ageH > 48, region: env.REGION || 'US', has_platprices_key: !!env.PLATPRICES_KEY });
+    return json({ taste, counts, runs: await lastRuns(env.DB), budget: await readBudget(env.DB), last_refresh: lastRefresh?.t || null, prices_stale: ageH != null && ageH > 48, region: env.REGION || 'US', has_platprices_key: !!env.PLATPRICES_KEY, plan: String(env.PLAN || 'free').toLowerCase(), tagger: env.ANTHROPIC_API_KEY ? (env.CLAUDE_MODEL || 'claude-haiku-4-5') : (env.AI_MODEL || 'workers-ai') });
   }
 
 

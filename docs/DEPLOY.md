@@ -71,3 +71,10 @@ On the site:
 - Site loads but `/api/health` errors: the D1 binding name is not `DB` or the AI binding is not `AI`. Check Worker → Settings → Bindings.
 - `discover` returns 0 with no error: Steam changed its search HTML. `worker/lib/steam.js` `parseSearchHtml` needs a new pattern.
 - Home shows "Can't reach the worker": the deploy is mid-flight or failed; check the build log.
+
+
+## Optional paid switches (v0.7)
+
+**Workers Paid ($5/month).** Cloudflare dashboard → Workers & Pages → Plans (or the "Upgrade" link on the Workers overview) → Workers Paid. Then Worker → Settings → Variables and Secrets → set `PLAN` to `paid`. Batches grow automatically; nothing else to change.
+
+**Claude for tagging (a few dollars once).** Claude Console (platform.claude.com) → create an account → Billing, add a small credit → API keys, create one. Worker → Settings → Variables and Secrets → add secret `ANTHROPIC_API_KEY`. Tagging switches over on the next run. `CLAUDE_MODEL` can be changed to `claude-sonnet-5` for stronger judgment at about twice the cost.

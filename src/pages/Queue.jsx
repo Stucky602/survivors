@@ -59,6 +59,7 @@ export default function Queue({ meta, onChange }) {
       {err && <p className="bar warn">{err}</p>}
 
       <h2>Auto-run</h2>
+      {meta && meta.plan ? <p className="muted">Cloudflare plan: {meta.plan}{meta.plan === 'free' ? ' (small batches, 50-fetch cap)' : ' (large batches)'}. Tagging with {meta.tagger}.</p> : null}
       {runner && runner.unavailable ? <p className="bar warn">The Runner isn't deployed yet. Push the latest repo; the deploy creates it.</p> : (
         <>
           <p className="muted">One button. The Runner works through Discover, Enrich, Match, Tag, and PS Store plans in the background, one batch every 45 seconds, and stops on its own when everything is done. Cron restarts it every day; you only press this for the first backfill or after a change.</p>

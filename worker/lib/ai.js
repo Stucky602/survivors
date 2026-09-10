@@ -11,7 +11,26 @@ export function scrub(text) {
 export const CAP_RE = /quota|limit|429|exceed|neurons|allocation|4006/i;
 export const isCapError = (e) => CAP_RE.test(String(e && e.message || e));
 
-export async function runJSON(env, { system, user, maxTokens = 1200, model: modelOverride }) {
+// Claude via the Messages API. Used for the tag step when ANTHROPIC_API_KEY is set; one subrequest per call.
+async function runClaude(env, { system, user, maxTokens }) {
+  const model = env.CLAUDE_MODEL || 'claude-haiku-4-5';
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort('timeout'), 60000);
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST', signal: ctl.signal,
+      headers: { 'content-type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({ model, max_tokens: maxTokens, temperature: 0, system: scrub(system), messages: [{ role: 'user', content: scrub(user) }] })
+    });
+    const j = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(`claude ${res.status}: ${(j && j.error && j.error.message) || 'request failed'}`);
+    const text = (j.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('\n');
+    return { model, text, json: extractJSON(text) };
+  } finally { clearTimeout(timer); }
+}
+
+export async function runJSON(env, { system, user, maxTokens = 1200, model: modelOverride, job = null }) {
+  if (job === 'tag' && env.ANTHROPIC_API_KEY) return runClaude(env, { system, user, maxTokens });
   const model = modelOverride || env.AI_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
   const sys = scrub(system), usr = scrub(user);
   let last = null;

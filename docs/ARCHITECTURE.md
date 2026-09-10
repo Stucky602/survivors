@@ -1,6 +1,6 @@
 # Survivors-like PSN tracker: architecture v0.1
 
-Status: v0.6.2 built Sep 10 2026. Sections 1 to 6 describe what is in the repo; sections 9 to 11 list what v0.2 to v0.4 added.
+Status: v0.7 built Sep 10 2026. Sections 1 to 6 describe what is in the repo; sections 9 to 11 list what v0.2 to v0.4 added.
 Decisions already made in chat: public site, one real user, $0/month, hybrid tagging (AI first pass, Kevin confirms high scorers), hub is both a filter and a weight.
 
 ## 1. What the site does
@@ -289,3 +289,12 @@ Kevin's reminder: a PS4-only release that plays on PS5 is possible and acceptabl
 ### 13b. v0.6.2: the AI allocation, and one bad byte (Sep 10)
 
 Two errors from the first real run. (1) Workers AI's free allocation (10,000 neurons a day, resets 00:00 UTC) ran out. The stages now record `settings.ai_capped_until` when they hit it, tag and plans return immediately until then, the Runner skips them and schedules itself to wake at 00:05 UTC to carry on, and Queue says so. Match and plans moved to an 8B model (`AI_MODEL_SMALL`, default `@cf/meta/llama-3.1-8b-instruct-fast`) since those are simple reads; tag keeps the 70B model because that is where the judgment is. (2) Workers AI rejected one request body as invalid JSON. Steam news text can carry a lone surrogate (half an emoji); `ai.js` now scrubs prompt text with `toWellFormed()` before sending. A game whose plans read fails for a non-cap reason is stamped `unknown` so it does not block the stage, and "Retry errored games" un-stamps those and clears the cap flag.
+
+
+## 14. v0.7: the two paid switches (Sep 10)
+
+Both optional, both behind a single dashboard setting, nothing changes if neither is set.
+
+**`PLAN` variable, `free` (default) or `paid`.** Every batch size and the discover page count derive from it. On Workers Paid the subrequest cap is 1,000 per invocation and CPU is 30 s, so: enrich 150 games per batch (600 fetches), discover 40 pages, default batch 60 for match/tag/plans, Runner ticks every 8 s instead of 45. The 700-game backfill goes from a day of ticks to minutes. Workers AI above the free 10,000 neurons/day bills at $0.011 per 1,000 neurons on Paid, so tag stops stalling at the cap.
+
+**`ANTHROPIC_API_KEY` secret (optional) with `CLAUDE_MODEL` (default `claude-haiku-4-5`).** When set, the tag step calls Claude's Messages API instead of Workers AI; match and plans stay on the 8B Workers AI model. One subrequest per game, so it works on Free too. Claude API errors are reported as `claude <status>` and never mark the Workers AI allocation as capped; a 401/402/403/429 stops the batch with the reason in the note. Haiku 4.5 is $1 per million input and $5 per million output tokens; a tag call is roughly 6K in and 600 out, so around a cent per game, a few dollars for the full backfill, then pennies a month.

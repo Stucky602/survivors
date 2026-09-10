@@ -6,9 +6,11 @@ import { runJSON, isCapError } from './ai.js';
 import { MATCH_SYSTEM, matchUser, TAG_SYSTEM, tagUser, PLAN_SYSTEM, planUser } from './prompts.js';
 import { computeQuality, scoreGame, categorize, needsReview, normalizeFacets, normalizeEvidence, DEFAULT_SETTINGS } from '../../shared/score.js';
 
-const limitOf = (env, override) => Math.max(1, Math.min(200, Number(override) || Number(env.BATCH_LIMIT) || 25));
+// PLAN=free keeps every stage under Cloudflare's 50-subrequest-per-invocation cap. PLAN=paid (Workers Paid, 1,000) runs big.
+export const isPaid = (env) => String(env.PLAN || 'free').toLowerCase() === 'paid';
+const limitOf = (env, override) => Math.max(1, Math.min(isPaid(env) ? 400 : 200, Number(override) || Number(env.BATCH_LIMIT) || (isPaid(env) ? 60 : 12)));
 // A stage stops taking new items after this long so a slow upstream never runs a cron tick into the wall.
-const TIME_BUDGET_MS = 40000;
+const TIME_BUDGET_MS = 40000; // wall-clock; Free CPU is 10 ms but fetch waits are free, Paid is 30 s CPU
 const budgetClock = () => { const t0 = Date.now(); return () => Date.now() - t0 > TIME_BUDGET_MS; };
 const MAX_ERRORS = 5;
 // Workers AI free allocation resets at 00:00 UTC. When a stage hits it, park the AI stages until then.
@@ -32,13 +34,14 @@ async function withRun(db, stage, fn) {
 // 1. Discover: walk the Steam search for each configured tag and insert unseen appids.
 // Cloudflare's free plan caps a Worker invocation at 50 subrequests, so this does a few pages per call
 // and stores a cursor. Click again (or use the ↻ button) to continue; the cron tick resumes it too.
-const PAGES_PER_RUN = 6; // 6 pages x however many tags, plus one D1 write each, stays well under 50 fetches
+const pagesPerRun = (env) => (isPaid(env) ? 40 : 6); // 6 pages stays under 50 fetches on Free; 40 on Paid
 export async function discover(env, opts = {}) {
   return withRun(env.DB, 'discover', async () => {
     const tags = (await getSetting(env.DB, 'steam_tags', [])).filter((t) => t.id);
     const extra = await getSetting(env.DB, 'extra_appids', []);
     const cursor = await getSetting(env.DB, 'discover_cursor', { tag: 0, page: 0 });
     if (opts.reset) { cursor.tag = 0; cursor.page = 0; }
+    const PAGES_PER_RUN = pagesPerRun(env);
     let added = 0, seen = 0, pagesThisRun = 0, done = false;
     let ti = Math.min(cursor.tag, tags.length);
     let pg = cursor.page;
@@ -63,10 +66,10 @@ export async function discover(env, opts = {}) {
 
 // 2. Enrich: appdetails + reviews + tag votes for new games, and games not enriched in 7 days.
 // 3 Steam fetches per game, so the batch is capped hard at 12 to stay under the 50-subrequest invocation limit.
-const ENRICH_MAX = 10; // 4 fetches per game now (details, reviews, tags, news) = 40 subrequests
+const enrichMax = (env) => (isPaid(env) ? 150 : 10); // 4 fetches per game: 40 on Free, 600 on Paid
 export async function enrich(env, opts = {}) {
   return withRun(env.DB, 'enrich', async () => {
-    const limit = Math.min(ENRICH_MAX, limitOf(env, opts.limit));
+    const limit = Math.min(enrichMax(env), limitOf(env, opts.limit));
     const { results } = await env.DB.prepare(
       `SELECT g.appid FROM games g LEFT JOIN steam_cache c ON c.appid = g.appid
        WHERE (g.status = 'new' OR (g.status = 'error' AND COALESCE(g.error_count,0) < ${MAX_ERRORS} AND (g.last_enriched IS NULL OR g.last_enriched < ?))
@@ -228,7 +231,7 @@ export async function tag(env, opts = {}) {
           psn_rating: g.star_rating ? `${g.star_rating}/5 from ${g.star_count} ratings` : null,
           reviews: rv?.reviews || []
         };
-        const ai = await runJSON(env, { system: TAG_SYSTEM, user: tagUser(corpus), maxTokens: 1600 });
+        const ai = await runJSON(env, { system: TAG_SYSTEM, user: tagUser(corpus), maxTokens: 1600, job: 'tag' });
         if (!ai.json || !ai.json.facets) throw new Error('model returned no facets JSON');
         const facets = normalizeFacets(ai.json.facets);
         const evidence = normalizeEvidence(ai.json.evidence);
@@ -253,8 +256,9 @@ export async function tag(env, opts = {}) {
         n++;
       } catch (e) {
         const msg = String(e.message || e);
-        if (isCapError(e)) { await markAiCapped(env); return { count: n, note: 'daily AI allocation reached, resumes after 00:00 UTC' }; }
+        if (!/^claude /.test(msg) && isCapError(e)) { await markAiCapped(env); return { count: n, note: 'daily AI allocation reached, resumes after 00:00 UTC' }; }
         await env.DB.prepare(`UPDATE games SET last_error = ? WHERE appid = ?`).bind(`tag: ${msg.slice(0, 280)}`, g.appid).run();
+        if (/^claude (401|402|403|429)/.test(msg)) return { count: n, note: `stopped: ${msg.slice(0, 120)}` };
       }
     }
     return { count: n };
