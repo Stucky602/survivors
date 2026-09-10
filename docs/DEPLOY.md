@@ -21,6 +21,12 @@ ALTER TABLE kevin ADD COLUMN want INTEGER DEFAULT 0; ALTER TABLE kevin ADD COLUM
 
 Run it before pushing the v0.2 code. The worker reads those columns on every page.
 
+For v0.6.1, paste this:
+
+```
+ALTER TABLE games ADD COLUMN ps5_plan_platform TEXT;
+```
+
 For v0.6, paste this:
 
 ```

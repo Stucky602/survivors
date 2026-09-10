@@ -2,9 +2,9 @@ import React from 'react';
 import { fmtDate } from '../api.js';
 
 export const PLAN_LABEL = {
-  announced_date: 'PS5 date announced',
-  announced_window: 'PS5 window announced',
-  announced: 'PS5 version announced',
+  announced_date: 'PS Store date announced',
+  announced_window: 'PS Store window announced',
+  announced: 'PlayStation version announced',
   planned: 'Consoles planned',
   not_planned: 'Not currently planned',
   unknown: 'Nothing announced'
@@ -25,5 +25,6 @@ export default function Ps5Plan({ g, long = false }) {
   else if (p.status === 'planned') main = <span>{PLAN_LABEL.planned}</span>;
   else if (p.status === 'not_planned') main = <span className="warn-text">{PLAN_LABEL.not_planned}</span>;
   else main = <span className="muted">{PLAN_LABEL.unknown}</span>;
-  return <span>{main}{long && p.note ? <span className="muted"> — “{p.note}”</span> : null}</span>;
+  const plat = p.platform === 'ps4' ? ' (PS4 version, plays on PS5)' : p.platform === 'both' ? ' (PS5 and PS4)' : p.platform === 'ps5' ? ' (PS5)' : '';
+  return <span>{main}{plat ? <span className="muted">{plat}</span> : null}{long && p.note ? <span className="muted"> — “{p.note}”</span> : null}</span>;
 }

@@ -18,7 +18,7 @@ export default function Upcoming({ meta }) {
       <h2>Preorder on the PS Store ({preorders.length})</h2>
       <GameTable games={preorders} columns={['score', 'category', 'price', 'ps5plan', 'steam']} empty="No preorders in the tracked set." />
       <h2>Not out anywhere yet ({notOut.length})</h2>
-      <p className="muted">Sorted by Steam release date where one is given. The PlayStation column shows what the developer has said.</p>
+      <p className="muted">Sorted by Steam release date where one is given. The PlayStation column shows what the developer has said; a PS4 version counts, it plays on PS5.</p>
       <GameTable games={notOut} columns={['score', 'category', 'release', 'ps5plan']} empty="No unreleased games in the tracked set." />
     </>
   );

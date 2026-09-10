@@ -20,7 +20,7 @@ const GAME_SELECT = `
          p.star_rating, p.star_count, p.psp_extra, p.psp_premium, p.lowest_ever, p.lowest_seen, p.release_date AS psn_release, p.refreshed_at,
          f.facets_json, f.evidence_json, f.proposed_json, f.score, f.category, f.confirmed_by, f.needs_review, f.tagged_at, f.model,
          k.owned, k.never, k.note, k.want, k.want_price, k.want_at, k.verdict, g.matched_at,
-         g.ps5_plan, g.ps5_plan_date, g.ps5_plan_window, g.ps5_plan_note, g.ps5_plan_at
+         g.ps5_plan, g.ps5_plan_date, g.ps5_plan_window, g.ps5_plan_note, g.ps5_plan_platform, g.ps5_plan_at
   FROM games g
   LEFT JOIN psn_products p ON p.ppid = g.ppid
   LEFT JOIN facets f ON f.appid = g.appid
@@ -44,7 +44,7 @@ function rowToGame(r, full = false) {
     } : null,
     facets, score: r.score, category: r.category, confirmed: !!r.confirmed_by, needs_review: !!r.needs_review, tagged_at: r.tagged_at,
     owned: !!r.owned, never: !!r.never, note: r.note || '', want: !!r.want, want_price: r.want_price, want_at: r.want_at, verdict: r.verdict || null, matched_at: r.matched_at,
-    ps5_plan: r.ps5_plan_at ? { status: r.ps5_plan || 'unknown', date: r.ps5_plan_date, window: r.ps5_plan_window, note: r.ps5_plan_note, at: r.ps5_plan_at } : null
+    ps5_plan: r.ps5_plan_at ? { status: r.ps5_plan || 'unknown', platform: r.ps5_plan_platform || 'unspecified', date: r.ps5_plan_date, window: r.ps5_plan_window, note: r.ps5_plan_note, at: r.ps5_plan_at } : null
   };
   if (full) {
     out.evidence = r.evidence_json ? JSON.parse(r.evidence_json) : null;
@@ -164,10 +164,10 @@ async function handleApi(request, env, ctx) {
 
   // Hand-set a PS5 plan when you know better than the news feed.
   if (m === 'POST' && path === '/admin/plan') {
-    const { appid, status, date, window, note } = body;
+    const { appid, status, date, window, note, platform } = body;
     if (!appid) return bad('appid required');
-    await env.DB.prepare(`UPDATE games SET ps5_plan = ?, ps5_plan_date = ?, ps5_plan_window = ?, ps5_plan_note = ?, ps5_plan_at = ? WHERE appid = ?`)
-      .bind(status || 'unknown', date || null, window || null, note || null, now(), appid).run();
+    await env.DB.prepare(`UPDATE games SET ps5_plan = ?, ps5_plan_date = ?, ps5_plan_window = ?, ps5_plan_note = ?, ps5_plan_platform = ?, ps5_plan_at = ? WHERE appid = ?`)
+      .bind(status || 'unknown', date || null, window || null, note || null, ['ps5', 'ps4', 'both'].includes(platform) ? platform : 'unspecified', now(), appid).run();
     return json({ ok: true });
   }
 

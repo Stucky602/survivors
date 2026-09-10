@@ -279,8 +279,9 @@ export async function plans(env, opts = {}) {
         const date = /^\d{4}-\d{2}-\d{2}$/.test(String(j.ps5_date || '')) ? j.ps5_date : null;
         const window = typeof j.ps5_window === 'string' ? j.ps5_window.slice(0, 40) : null;
         const note = typeof j.evidence === 'string' ? j.evidence.slice(0, 300) : null;
-        await env.DB.prepare(`UPDATE games SET ps5_plan = ?, ps5_plan_date = ?, ps5_plan_window = ?, ps5_plan_note = ?, ps5_plan_at = ? WHERE appid = ?`)
-          .bind(status, status === 'announced_date' ? date : null, status === 'announced_window' ? window : null, status === 'unknown' ? null : note, now(), g.appid).run();
+        const platform = ['ps5', 'ps4', 'both'].includes(j.platform) && /^announced/.test(status) ? j.platform : 'unspecified';
+        await env.DB.prepare(`UPDATE games SET ps5_plan = ?, ps5_plan_date = ?, ps5_plan_window = ?, ps5_plan_note = ?, ps5_plan_platform = ?, ps5_plan_at = ? WHERE appid = ?`)
+          .bind(status, status === 'announced_date' ? date : null, status === 'announced_window' ? window : null, status === 'unknown' ? null : note, platform, now(), g.appid).run();
         n++;
       } catch (e) {
         const msg = String(e.message || e);

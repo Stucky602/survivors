@@ -4,9 +4,9 @@ import GameTable from '../components/GameTable.jsx';
 import { PLAN_LABEL } from '../components/Ps5Plan.jsx';
 
 const GROUPS = [
-  ['announced_date', 'PS5 date announced'],
-  ['announced_window', 'PS5 window announced'],
-  ['announced', 'PS5 version announced, no date'],
+  ['announced_date', 'PS Store date announced'],
+  ['announced_window', 'PS Store window announced'],
+  ['announced', 'PlayStation version announced, no date'],
   ['planned', 'Consoles planned, PlayStation not confirmed'],
   ['unknown', 'Nothing announced'],
   ['not_planned', 'Not currently planned']
@@ -27,7 +27,7 @@ export default function OnSteam({ meta }) {
   return (
     <>
       <h1>On Steam, not on the PS Store</h1>
-      <p className="muted">{shown.length} games, sorted by taste score inside each group. What each developer has said about a PlayStation release, read from their Steam news posts and store page.{noKey ? ' These have not been checked against the PS Store yet because the PlatPrices key is not on the worker; some are already on PS5 and will move to the PS Store page once matching runs.' : ' Rechecked against the PS Store weekly.'}</p>
+      <p className="muted">{shown.length} games, sorted by taste score inside each group. What each developer has said about a PlayStation release, read from their Steam news posts and store page.{noKey ? ' These have not been checked against the PS Store yet because the PlatPrices key is not on the worker; some are already on the PS Store and will move to that page once matching runs.' : ' Rechecked against the PS Store weekly.'}</p>
       <label className="check"><input type="checkbox" checked={hideOwned} onChange={(e) => setHideOwned(e.target.checked)} /> Hide owned</label>
       {GROUPS.map(([st, label]) => {
         const list = byStatus(st);

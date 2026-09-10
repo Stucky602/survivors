@@ -3,7 +3,7 @@ import { api, getToken } from '../api.js';
 import FacetEditor from '../components/FacetEditor.jsx';
 
 const STAGES = ['discover', 'enrich', 'match', 'refresh', 'tag', 'plans', 'rescore'];
-const LABEL = { discover: 'Discover', enrich: 'Enrich', match: 'Match', refresh: 'Refresh', tag: 'Tag', plans: 'PS5 plans', rescore: 'Rescore' };
+const LABEL = { discover: 'Discover', enrich: 'Enrich', match: 'Match', refresh: 'Refresh', tag: 'Tag', plans: 'PS Store plans', rescore: 'Rescore' };
 
 export default function Queue({ meta, onChange }) {
   const [q, setQ] = useState(null);
@@ -61,7 +61,7 @@ export default function Queue({ meta, onChange }) {
       <h2>Auto-run</h2>
       {runner && runner.unavailable ? <p className="bar warn">The Runner isn't deployed yet. Push the latest repo; the deploy creates it.</p> : (
         <>
-          <p className="muted">One button. The Runner works through Discover, Enrich, Match, Tag, and PS5 plans in the background, one batch every 45 seconds, and stops on its own when everything is done. Cron restarts it every day; you only press this for the first backfill or after a change.</p>
+          <p className="muted">One button. The Runner works through Discover, Enrich, Match, Tag, and PS Store plans in the background, one batch every 45 seconds, and stops on its own when everything is done. Cron restarts it every day; you only press this for the first backfill or after a change.</p>
           <div className="actions">
             {runner && runner.running
               ? <button onClick={() => runnerCmd('stop')} disabled={!!busy}>Stop</button>

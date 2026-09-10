@@ -101,10 +101,11 @@ export default function Game({ appid, meta }) {
               <dl>
                 <dt>PlayStation plans</dt><dd><Ps5Plan g={g} long />{g.ps5_plan ? <span className="muted"> (read {fmtDate(g.ps5_plan.at)})</span> : null}</dd>
               </dl>
-              {admin && !planEdit && <div className="actions"><button onClick={() => setPlanEdit({ status: g.ps5_plan?.status || 'unknown', date: g.ps5_plan?.date || '', window: g.ps5_plan?.window || '', note: g.ps5_plan?.note || '' })}>Set plan by hand</button></div>}
+              {admin && !planEdit && <div className="actions"><button onClick={() => setPlanEdit({ status: g.ps5_plan?.status || 'unknown', platform: g.ps5_plan?.platform || 'unspecified', date: g.ps5_plan?.date || '', window: g.ps5_plan?.window || '', note: g.ps5_plan?.note || '' })}>Set plan by hand</button></div>}
               {admin && planEdit && (
                 <div className="actions">
                   <select value={planEdit.status} onChange={(e) => setPlanEdit({ ...planEdit, status: e.target.value })}>{Object.entries(PLAN_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
+                  <select value={planEdit.platform || 'unspecified'} onChange={(e) => setPlanEdit({ ...planEdit, platform: e.target.value })}><option value="unspecified">platform not named</option><option value="ps5">PS5</option><option value="ps4">PS4</option><option value="both">PS5 and PS4</option></select>
                   <input type="date" value={planEdit.date} onChange={(e) => setPlanEdit({ ...planEdit, date: e.target.value })} />
                   <input type="text" placeholder="window, e.g. Q1 2027" value={planEdit.window} onChange={(e) => setPlanEdit({ ...planEdit, window: e.target.value })} />
                   <input type="text" placeholder="source note" value={planEdit.note} onChange={(e) => setPlanEdit({ ...planEdit, note: e.target.value })} />

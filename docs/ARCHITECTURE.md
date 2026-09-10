@@ -1,6 +1,6 @@
 # Survivors-like PSN tracker: architecture v0.1
 
-Status: v0.6 built Sep 10 2026. Sections 1 to 6 describe what is in the repo; sections 9 to 11 list what v0.2 to v0.4 added.
+Status: v0.6.1 built Sep 10 2026. Sections 1 to 6 describe what is in the repo; sections 9 to 11 list what v0.2 to v0.4 added.
 Decisions already made in chat: public site, one real user, $0/month, hybrid tagging (AI first pass, Kevin confirms high scorers), hub is both a filter and a weight.
 
 ## 1. What the site does
@@ -279,3 +279,8 @@ Stored on `games` (migration 0004: `ps5_plan`, `ps5_plan_date`, `ps5_plan_window
 Pages: **On Steam** (`/games?view=steamonly`) groups by status in order of usefulness: date, window, announced, planned, nothing announced, not planned, and a trailing "not checked yet" group. **Upcoming** (`view=upcoming`) is now only preorders and games not out anywhere. The PlayStation column appears on both, and the Game page has a PlayStation plans line with the evidence.
 
 Enrich now makes 4 Steam fetches per game (details, reviews, tag votes, news), so its batch cap dropped from 12 to 10 (40 subrequests). The Runner picks `plans` after `tag`.
+
+
+### 13a. v0.6.1: PS4 counts (Sep 10)
+
+Kevin's reminder: a PS4-only release that plays on PS5 is possible and acceptable. Matched games already carry PlatPrices' `IsPS4`/`IsPS5` and are never filtered by generation. The plans read now records which generation the developer named (`ps5_plan_platform`: ps5, ps4, both, unspecified; migration 0005) and the UI shows "(PS4 version, plays on PS5)" when it was PS4 only. User-facing labels say "PlayStation" or "PS Store" rather than "PS5"; column names keep the `ps5_` prefix to avoid churn.
