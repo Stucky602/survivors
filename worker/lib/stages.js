@@ -1,5 +1,5 @@
 // Pipeline stages. Each one processes a capped batch, logs a run_log row, and never throws past its own boundary.
-import { now, daysFromNow, getSetting, startRun, endRun, upsertGameFromSteamSearch, canSpend } from './db.js';
+import { now, daysFromNow, getSetting, setSetting, startRun, endRun, upsertGameFromSteamSearch, canSpend } from './db.js';
 import * as steam from './steam.js';
 import * as pp from './platprices.js';
 import { runJSON } from './ai.js';
