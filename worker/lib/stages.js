@@ -2,7 +2,7 @@
 import { now, daysFromNow, getSetting, setSetting, startRun, endRun, upsertGameFromSteamSearch, canSpend } from './db.js';
 import * as steam from './steam.js';
 import * as pp from './platprices.js';
-import { runJSON } from './ai.js';
+import { runJSON, isCapError } from './ai.js';
 import { MATCH_SYSTEM, matchUser, TAG_SYSTEM, tagUser, PLAN_SYSTEM, planUser } from './prompts.js';
 import { computeQuality, scoreGame, categorize, needsReview, normalizeFacets, normalizeEvidence, DEFAULT_SETTINGS } from '../../shared/score.js';
 
@@ -11,6 +11,11 @@ const limitOf = (env, override) => Math.max(1, Math.min(200, Number(override) ||
 const TIME_BUDGET_MS = 40000;
 const budgetClock = () => { const t0 = Date.now(); return () => Date.now() - t0 > TIME_BUDGET_MS; };
 const MAX_ERRORS = 5;
+// Workers AI free allocation resets at 00:00 UTC. When a stage hits it, park the AI stages until then.
+const nextUtcMidnight = () => { const d = new Date(); d.setUTCHours(24, 0, 0, 0); return d.toISOString(); };
+async function markAiCapped(env) { await setSetting(env.DB, 'ai_capped_until', nextUtcMidnight()); }
+export async function aiCapped(env) { const u = await getSetting(env.DB, 'ai_capped_until', null); return !!u && u > now(); }
+const smallModel = (env) => env.AI_MODEL_SMALL || '@cf/meta/llama-3.1-8b-instruct-fast';
 
 async function withRun(db, stage, fn) {
   const id = await startRun(db, stage);
@@ -135,7 +140,7 @@ export async function match(env, opts = {}) {
           await env.DB.prepare(`UPDATE games SET psn_status = 'not_listed', next_match_at = ? WHERE appid = ?`).bind(daysFromNow(7), g.appid).run();
           n++; continue;
         }
-        const ai = await runJSON(env, { system: MATCH_SYSTEM, user: matchUser({ name: g.name, developer: g.developer, publisher: g.publisher, release: g.steam_release }, cands), maxTokens: 200 });
+        const ai = await runJSON(env, { system: MATCH_SYSTEM, user: matchUser({ name: g.name, developer: g.developer, publisher: g.publisher, release: g.steam_release }, cands), maxTokens: 200, model: smallModel(env) });
         const pick = ai.json || {};
         const chosen = cands.find((c) => Number(c.PPID) === Number(pick.ppid));
         const conf = Number(pick.confidence) || 0;
@@ -195,6 +200,7 @@ export async function refresh(env, opts = {}) {
 // 5. Tag: first-pass facets for enriched games with no facets, or whose review count has doubled since tagging.
 export async function tag(env, opts = {}) {
   return withRun(env.DB, 'tag', async () => {
+    if (await aiCapped(env)) return { count: 0, note: 'daily AI allocation used, waiting for 00:00 UTC' };
     const limit = limitOf(env, opts.limit);
     const settings = { ...DEFAULT_SETTINGS, ...(await getSetting(env.DB, 'taste', {})) };
     const { results } = await env.DB.prepare(
@@ -247,9 +253,8 @@ export async function tag(env, opts = {}) {
         n++;
       } catch (e) {
         const msg = String(e.message || e);
-        const capped = /quota|limit|429|exceed|neurons|allocation/i.test(msg);
-        await env.DB.prepare(`UPDATE games SET last_error = ? WHERE appid = ?`).bind(`tag: ${capped ? 'daily AI allocation reached, ' : ''}${msg.slice(0, 240)}`, g.appid).run();
-        if (capped) return { count: n, note: 'daily AI allocation reached, resumes tomorrow' };
+        if (isCapError(e)) { await markAiCapped(env); return { count: n, note: 'daily AI allocation reached, resumes after 00:00 UTC' }; }
+        await env.DB.prepare(`UPDATE games SET last_error = ? WHERE appid = ?`).bind(`tag: ${msg.slice(0, 280)}`, g.appid).run();
       }
     }
     return { count: n };
@@ -260,6 +265,7 @@ export async function tag(env, opts = {}) {
 export const PLAN_STATUSES = ['announced_date', 'announced_window', 'announced', 'planned', 'not_planned', 'unknown'];
 export async function plans(env, opts = {}) {
   return withRun(env.DB, 'plans', async () => {
+    if (await aiCapped(env)) return { count: 0, note: 'daily AI allocation used, waiting for 00:00 UTC' };
     const limit = limitOf(env, opts.limit);
     const { results } = await env.DB.prepare(
       `SELECT g.appid, g.name, c.appdetails_json, c.news_json FROM games g JOIN steam_cache c ON c.appid = g.appid
@@ -273,7 +279,7 @@ export async function plans(env, opts = {}) {
       try {
         const d = JSON.parse(g.appdetails_json || '{}');
         const news = JSON.parse(g.news_json || '[]');
-        const ai = await runJSON(env, { system: PLAN_SYSTEM, user: planUser({ name: g.name, short_description: d.short_description, description: d.about, news }), maxTokens: 300 });
+        const ai = await runJSON(env, { system: PLAN_SYSTEM, user: planUser({ name: g.name, short_description: d.short_description, description: d.about, news }), maxTokens: 300, model: smallModel(env) });
         const j = ai.json || {};
         const status = PLAN_STATUSES.includes(j.ps5_status) ? j.ps5_status : 'unknown';
         const date = /^\d{4}-\d{2}-\d{2}$/.test(String(j.ps5_date || '')) ? j.ps5_date : null;
@@ -285,9 +291,8 @@ export async function plans(env, opts = {}) {
         n++;
       } catch (e) {
         const msg = String(e.message || e);
-        const capped = /quota|limit|429|exceed|neurons|allocation/i.test(msg);
-        await env.DB.prepare(`UPDATE games SET last_error = ? WHERE appid = ?`).bind(`plans: ${capped ? 'daily AI allocation reached, ' : ''}${msg.slice(0, 240)}`, g.appid).run();
-        if (capped) return { count: n, note: 'daily AI allocation reached, resumes tomorrow' };
+        if (isCapError(e)) { await markAiCapped(env); return { count: n, note: 'daily AI allocation reached, resumes after 00:00 UTC' }; }
+        await env.DB.prepare(`UPDATE games SET last_error = ?, ps5_plan = 'unknown', ps5_plan_at = ? WHERE appid = ?`).bind(`plans: ${msg.slice(0, 280)}`, now(), g.appid).run();
       }
     }
     return { count: n };
@@ -299,7 +304,9 @@ export async function retryErrors(env) {
   return withRun(env.DB, 'retry-errors', async () => {
     const a = await env.DB.prepare(`UPDATE games SET status = 'new', error_count = 0, last_error = NULL, last_enriched = NULL WHERE status = 'error'`).run();
     const b = await env.DB.prepare(`UPDATE games SET last_error = NULL WHERE status = 'enriched' AND last_error IS NOT NULL`).run();
-    return { count: a.meta.changes, note: `${b.meta.changes} stale error notes cleared` };
+    await env.DB.prepare(`UPDATE games SET ps5_plan_at = NULL WHERE ps5_plan = 'unknown' AND ps5_plan_note IS NULL`).run();
+    await setSetting(env.DB, 'ai_capped_until', null);
+    return { count: a.meta.changes, note: `${b.meta.changes} stale error notes cleared, AI stages unparked` };
   });
 }
 

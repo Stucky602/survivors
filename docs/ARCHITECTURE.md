@@ -1,6 +1,6 @@
 # Survivors-like PSN tracker: architecture v0.1
 
-Status: v0.6.1 built Sep 10 2026. Sections 1 to 6 describe what is in the repo; sections 9 to 11 list what v0.2 to v0.4 added.
+Status: v0.6.2 built Sep 10 2026. Sections 1 to 6 describe what is in the repo; sections 9 to 11 list what v0.2 to v0.4 added.
 Decisions already made in chat: public site, one real user, $0/month, hybrid tagging (AI first pass, Kevin confirms high scorers), hub is both a filter and a weight.
 
 ## 1. What the site does
@@ -284,3 +284,8 @@ Enrich now makes 4 Steam fetches per game (details, reviews, tag votes, news), s
 ### 13a. v0.6.1: PS4 counts (Sep 10)
 
 Kevin's reminder: a PS4-only release that plays on PS5 is possible and acceptable. Matched games already carry PlatPrices' `IsPS4`/`IsPS5` and are never filtered by generation. The plans read now records which generation the developer named (`ps5_plan_platform`: ps5, ps4, both, unspecified; migration 0005) and the UI shows "(PS4 version, plays on PS5)" when it was PS4 only. User-facing labels say "PlayStation" or "PS Store" rather than "PS5"; column names keep the `ps5_` prefix to avoid churn.
+
+
+### 13b. v0.6.2: the AI allocation, and one bad byte (Sep 10)
+
+Two errors from the first real run. (1) Workers AI's free allocation (10,000 neurons a day, resets 00:00 UTC) ran out. The stages now record `settings.ai_capped_until` when they hit it, tag and plans return immediately until then, the Runner skips them and schedules itself to wake at 00:05 UTC to carry on, and Queue says so. Match and plans moved to an 8B model (`AI_MODEL_SMALL`, default `@cf/meta/llama-3.1-8b-instruct-fast`) since those are simple reads; tag keeps the 70B model because that is where the judgment is. (2) Workers AI rejected one request body as invalid JSON. Steam news text can carry a lone surrogate (half an emoji); `ai.js` now scrubs prompt text with `toWellFormed()` before sending. A game whose plans read fails for a non-cap reason is stamped `unknown` so it does not block the stage, and "Retry errored games" un-stamps those and clears the cap flag.

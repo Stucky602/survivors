@@ -39,3 +39,13 @@ assert.equal(row.lowest_ever, null);
 assert.equal(row.is_on_sale, 1);
 
 console.log('parse.test: ok');
+
+// v0.6.2: prompt scrubbing and cap detection
+import { scrub, isCapError } from '../worker/lib/ai.js';
+const s1 = scrub('a \uD83D b \uDE00 c \u0000 d \uD83D\uDE00 e');
+assert.equal(Buffer.from(s1, 'utf8').toString('utf8'), s1);
+assert.ok(s1.includes('\uD83D\uDE00'), 'a proper surrogate pair survives');
+assert.ok(!/\u0000/.test(s1));
+assert.equal(isCapError(new Error('4006: you have used up your daily free allocation of 10,000 neurons')), true);
+assert.equal(isCapError(new Error('8006: Invalid data for body')), false);
+console.log('parse.test v0.6.2: ok');

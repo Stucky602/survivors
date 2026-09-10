@@ -1,11 +1,23 @@
 // Workers AI wrapper. One job: send a system + user prompt, get back a parsed JSON object, never throw on parse.
 
-export async function runJSON(env, { system, user, maxTokens = 1200 }) {
-  const model = env.AI_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+// Strip what breaks a JSON request body: lone surrogates (half an emoji from a Steam post) and control characters.
+export function scrub(text) {
+  let t = String(text || '');
+  if (typeof t.toWellFormed === 'function') t = t.toWellFormed();
+  else t = t.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, '').replace(/(^|[^\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '$1');
+  return t.replace(/\uFFFD/g, '').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ' ');
+}
+
+export const CAP_RE = /quota|limit|429|exceed|neurons|allocation|4006/i;
+export const isCapError = (e) => CAP_RE.test(String(e && e.message || e));
+
+export async function runJSON(env, { system, user, maxTokens = 1200, model: modelOverride }) {
+  const model = modelOverride || env.AI_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+  const sys = scrub(system), usr = scrub(user);
   let last = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     const res = await env.AI.run(model, {
-      messages: [{ role: 'system', content: system }, { role: 'user', content: attempt ? `${user}\n\nReply with the JSON object only.` : user }],
+      messages: [{ role: 'system', content: sys }, { role: 'user', content: attempt ? `${usr}\n\nReply with the JSON object only.` : usr }],
       max_tokens: maxTokens,
       temperature: attempt ? 0 : 0.1
     });

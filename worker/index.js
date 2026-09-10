@@ -1,5 +1,5 @@
 // Survivors worker: API routes, cron stages, and the static site (via the assets binding).
-import { STAGES, acceptMatch } from './lib/stages.js';
+import { STAGES, acceptMatch, aiCapped } from './lib/stages.js';
 import { Runner, pickStage } from './lib/runner.js';
 export { Runner };
 import { getSetting, setSetting, lastRuns, readBudget, now } from './lib/db.js';
@@ -135,7 +135,7 @@ async function handleApi(request, env, ctx) {
     const id = env.RUNNER.idFromName('main');
     const r = await env.RUNNER.get(id).fetch(new Request(`https://runner${path}`));
     const d = await r.json();
-    if (path.endsWith('status')) d.pending = await pickStage(env);
+    if (path.endsWith('status')) { d.pending = await pickStage(env); d.ai_capped_until = (await aiCapped(env)) ? await getSetting(env.DB, 'ai_capped_until', null) : null; }
     return json(d);
   }
 

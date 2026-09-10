@@ -27,6 +27,7 @@
   "vars": {
     "REGION": "US",
     "AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "AI_MODEL_SMALL": "@cf/meta/llama-3.1-8b-instruct-fast",
     "BATCH_LIMIT": "12"
   },
   "observability": { "enabled": true },

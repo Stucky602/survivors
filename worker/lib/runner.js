@@ -1,7 +1,7 @@
 // The Runner: a Durable Object that drains the pipeline one batch per alarm.
 // Each alarm is its own Worker invocation with its own 50-subrequest budget, which is the only way
 // to backfill several hundred games on the free plan without a human clicking a button per batch.
-import { STAGES } from './stages.js';
+import { STAGES, aiCapped } from './stages.js';
 import { getSetting, daysFromNow, now } from './db.js';
 
 const TICK_MS = 45000;      // between batches
@@ -56,6 +56,12 @@ export class Runner {
     await this.state.storage.put('last', { at: now(), stage: stage || IDLE_NOTE, count: result?.count ?? 0, ok: result?.ok ?? true, note: result?.note || result?.error || null });
     const more = stage && ticks < MAX_TICKS;
     if (more) await this.state.storage.setAlarm(Date.now() + TICK_MS);
+    else if (await aiCapped(env)) {
+      // Wake again just after the allocation resets so the backfill continues without anyone pressing anything.
+      const d = new Date(); d.setUTCHours(24, 5, 0, 0);
+      await this.state.storage.put('ticks', 0);
+      await this.state.storage.setAlarm(d.getTime());
+    }
   }
 }
 
@@ -74,6 +80,7 @@ export async function pickStage(env) {
     ).bind(now()).first();
     if (matchable.n > 0) return 'match';
   }
+  if (await aiCapped(env)) return null; // tag and plans both need the model; wait for the reset
   const taggable = await db.prepare(
     `SELECT COUNT(*) AS n FROM games g LEFT JOIN facets f ON f.appid = g.appid JOIN steam_cache c ON c.appid = g.appid
      WHERE g.status = 'enriched' AND c.appdetails_json IS NOT NULL AND (f.appid IS NULL OR (f.confirmed_by IS NULL AND COALESCE(g.steam_pos,0)+COALESCE(g.steam_neg,0) >= 2 * COALESCE(f.reviews_at_tag, 0) + 20))

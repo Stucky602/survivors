@@ -68,7 +68,7 @@ export default function Queue({ meta, onChange }) {
               : <button className="primary" onClick={() => runnerCmd('start')} disabled={!!busy}>Run everything</button>}
             {runner && <span className="muted">
               {runner.running ? `Running, batch ${runner.ticks}, next in under a minute.` : 'Idle.'}
-              {runner.pending ? ` Next up: ${runner.pending}.` : runner.running ? '' : ' Nothing pending.'}
+              {runner.ai_capped_until ? ` Today's free AI allocation is used up; tagging and plans resume after ${runner.ai_capped_until.slice(11, 16)} UTC${runner.running ? ' (the Runner wakes itself then)' : ''}.` : runner.pending ? ` Next up: ${runner.pending}.` : runner.running ? '' : ' Nothing pending.'}
               {runner.last && runner.last.stage !== 'idle' ? ` Last: ${runner.last.stage} ${runner.last.ok ? 'ok' : 'failed'} ${runner.last.count}${runner.last.note ? `, ${runner.last.note}` : ''}.` : ''}
             </span>}
           </div>
