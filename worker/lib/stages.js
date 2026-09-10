@@ -3,7 +3,7 @@ import { now, daysFromNow, getSetting, setSetting, startRun, endRun, upsertGameF
 import * as steam from './steam.js';
 import * as pp from './platprices.js';
 import { runJSON } from './ai.js';
-import { MATCH_SYSTEM, matchUser, TAG_SYSTEM, tagUser } from './prompts.js';
+import { MATCH_SYSTEM, matchUser, TAG_SYSTEM, tagUser, PLAN_SYSTEM, planUser } from './prompts.js';
 import { computeQuality, scoreGame, categorize, needsReview, normalizeFacets, normalizeEvidence, DEFAULT_SETTINGS } from '../../shared/score.js';
 
 const limitOf = (env, override) => Math.max(1, Math.min(200, Number(override) || Number(env.BATCH_LIMIT) || 25));
@@ -58,13 +58,15 @@ export async function discover(env, opts = {}) {
 
 // 2. Enrich: appdetails + reviews + tag votes for new games, and games not enriched in 7 days.
 // 3 Steam fetches per game, so the batch is capped hard at 12 to stay under the 50-subrequest invocation limit.
-const ENRICH_MAX = 12;
+const ENRICH_MAX = 10; // 4 fetches per game now (details, reviews, tags, news) = 40 subrequests
 export async function enrich(env, opts = {}) {
   return withRun(env.DB, 'enrich', async () => {
     const limit = Math.min(ENRICH_MAX, limitOf(env, opts.limit));
     const { results } = await env.DB.prepare(
-      `SELECT appid FROM games WHERE (status = 'new' OR (status = 'error' AND COALESCE(error_count,0) < ${MAX_ERRORS} AND (last_enriched IS NULL OR last_enriched < ?)) OR (status = 'enriched' AND (last_enriched IS NULL OR last_enriched < ?)))
-       ORDER BY CASE status WHEN 'new' THEN 0 WHEN 'error' THEN 1 ELSE 2 END, last_enriched LIMIT ?`
+      `SELECT g.appid FROM games g LEFT JOIN steam_cache c ON c.appid = g.appid
+       WHERE (g.status = 'new' OR (g.status = 'error' AND COALESCE(g.error_count,0) < ${MAX_ERRORS} AND (g.last_enriched IS NULL OR g.last_enriched < ?))
+              OR (g.status = 'enriched' AND (g.last_enriched IS NULL OR g.last_enriched < ? OR c.news_json IS NULL)))
+       ORDER BY CASE g.status WHEN 'new' THEN 0 WHEN 'error' THEN 1 ELSE 2 END, (c.news_json IS NULL) DESC, g.last_enriched LIMIT ?`
     ).bind(daysFromNow(-1 / 24), daysFromNow(-7), limit).all();
     let n = 0;
     const over = budgetClock();
@@ -76,6 +78,7 @@ export async function enrich(env, opts = {}) {
         if (d.type !== 'game') { await env.DB.prepare(`UPDATE games SET status = 'excluded', last_error = ?, last_enriched = ? WHERE appid = ?`).bind(`type ${d.type}`, now(), appid).run(); continue; }
         const r = await steam.appReviews(appid).catch(() => null);
         const tv = await steam.tagVotes(appid);
+        const news = await steam.appNews(appid);
         const qs = (r && r.query_summary) || {};
         const genres = (d.genres || []).map((g) => g.description);
         const ea = genres.includes('Early Access') ? 1 : 0;
@@ -95,9 +98,11 @@ export async function enrich(env, opts = {}) {
         };
         const reviews = r ? { query_summary: qs, reviews: (r.reviews || []).map((x) => ({ voted_up: x.voted_up, votes_up: x.votes_up, hours: Math.round((x.author?.playtime_forever || 0) / 60), text: x.review })) } : null;
         await env.DB.prepare(
-          `INSERT INTO steam_cache (appid, appdetails_json, appreviews_json, tag_votes_json, fetched_at) VALUES (?, ?, ?, ?, ?)
-           ON CONFLICT(appid) DO UPDATE SET appdetails_json = excluded.appdetails_json, appreviews_json = excluded.appreviews_json, tag_votes_json = excluded.tag_votes_json, fetched_at = excluded.fetched_at`
-        ).bind(appid, JSON.stringify(slim), reviews ? JSON.stringify(reviews) : null, tv ? JSON.stringify(tv) : null, now()).run();
+          `INSERT INTO steam_cache (appid, appdetails_json, appreviews_json, tag_votes_json, news_json, fetched_at) VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(appid) DO UPDATE SET appdetails_json = excluded.appdetails_json, appreviews_json = excluded.appreviews_json, tag_votes_json = excluded.tag_votes_json, news_json = COALESCE(excluded.news_json, steam_cache.news_json), fetched_at = excluded.fetched_at`
+        ).bind(appid, JSON.stringify(slim), reviews ? JSON.stringify(reviews) : null, tv ? JSON.stringify(tv) : null, news ? JSON.stringify(news) : JSON.stringify([]), now()).run();
+        // News changed since the last plan read: let the plans stage look again.
+        await env.DB.prepare(`UPDATE games SET ps5_plan_at = NULL WHERE appid = ? AND ps5_plan IS NOT NULL AND ps5_plan NOT IN ('announced_date') AND ps5_plan_at < ?`).bind(appid, daysFromNow(-30)).run();
         n++;
         await steam.pause(300);
       } catch (e) {
@@ -251,6 +256,43 @@ export async function tag(env, opts = {}) {
   });
 }
 
+// 6. Plans: what has the developer said about a PlayStation release. Steam-only games only; matched games have a real date.
+export const PLAN_STATUSES = ['announced_date', 'announced_window', 'announced', 'planned', 'not_planned', 'unknown'];
+export async function plans(env, opts = {}) {
+  return withRun(env.DB, 'plans', async () => {
+    const limit = limitOf(env, opts.limit);
+    const { results } = await env.DB.prepare(
+      `SELECT g.appid, g.name, c.appdetails_json, c.news_json FROM games g JOIN steam_cache c ON c.appid = g.appid
+       WHERE g.status = 'enriched' AND g.ppid IS NULL AND c.news_json IS NOT NULL AND g.ps5_plan_at IS NULL
+       ORDER BY COALESCE(g.steam_pos,0) DESC LIMIT ?`
+    ).bind(limit).all();
+    let n = 0;
+    const over = budgetClock();
+    for (const g of results) {
+      if (over()) break;
+      try {
+        const d = JSON.parse(g.appdetails_json || '{}');
+        const news = JSON.parse(g.news_json || '[]');
+        const ai = await runJSON(env, { system: PLAN_SYSTEM, user: planUser({ name: g.name, short_description: d.short_description, description: d.about, news }), maxTokens: 300 });
+        const j = ai.json || {};
+        const status = PLAN_STATUSES.includes(j.ps5_status) ? j.ps5_status : 'unknown';
+        const date = /^\d{4}-\d{2}-\d{2}$/.test(String(j.ps5_date || '')) ? j.ps5_date : null;
+        const window = typeof j.ps5_window === 'string' ? j.ps5_window.slice(0, 40) : null;
+        const note = typeof j.evidence === 'string' ? j.evidence.slice(0, 300) : null;
+        await env.DB.prepare(`UPDATE games SET ps5_plan = ?, ps5_plan_date = ?, ps5_plan_window = ?, ps5_plan_note = ?, ps5_plan_at = ? WHERE appid = ?`)
+          .bind(status, status === 'announced_date' ? date : null, status === 'announced_window' ? window : null, status === 'unknown' ? null : note, now(), g.appid).run();
+        n++;
+      } catch (e) {
+        const msg = String(e.message || e);
+        const capped = /quota|limit|429|exceed|neurons|allocation/i.test(msg);
+        await env.DB.prepare(`UPDATE games SET last_error = ? WHERE appid = ?`).bind(`plans: ${capped ? 'daily AI allocation reached, ' : ''}${msg.slice(0, 240)}`, g.appid).run();
+        if (capped) return { count: n, note: 'daily AI allocation reached, resumes tomorrow' };
+      }
+    }
+    return { count: n };
+  });
+}
+
 // Reset errored games so they get retried now, and clear stale error text on healthy rows.
 export async function retryErrors(env) {
   return withRun(env.DB, 'retry-errors', async () => {
@@ -282,4 +324,4 @@ export async function rescore(env) {
   });
 }
 
-export const STAGES = { discover, enrich, match, refresh, tag, rescore, 'retry-errors': retryErrors };
+export const STAGES = { discover, enrich, match, refresh, tag, plans, rescore, 'retry-errors': retryErrors };

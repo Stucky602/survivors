@@ -2,6 +2,7 @@ import React from 'react';
 import { money, fmtDate, daysUntil, getPsPlus } from '../api.js';
 import { dealVerdict } from '../../shared/score.js';
 import XpBar from './XpBar.jsx';
+import Ps5Plan from './Ps5Plan.jsx';
 
 export const CATEGORY_LABEL = {
   perfect_fit: 'Perfect fit', progression_monster: 'Progression monster', pure_survivor: 'Pure survivor', survivor_hybrid: 'Hybrid',
@@ -36,6 +37,7 @@ export default function GameTable({ games, columns = ['score', 'category', 'pric
           {has('price') && <th>PS Store</th>}
           {has('sale_end') && <th>Sale ends</th>}
           {has('release') && <th>Release</th>}
+          {has('ps5plan') && <th>PlayStation</th>}
           {has('psn_rating') && <th className="num">PS rating</th>}
           {has('steam') && <th className="num">Steam</th>}
           {compare && <th></th>}
@@ -65,6 +67,7 @@ export default function GameTable({ games, columns = ['score', 'category', 'pric
               {has('price') && <td><Price g={g} /></td>}
               {has('sale_end') && <td>{days != null ? (days <= 0 ? 'today' : days === 1 ? 'tomorrow' : `${days} days`) : ''}</td>}
               {has('release') && <td>{g.psn && g.psn.release_date ? fmtDate(g.psn.release_date) : (g.steam_release ? <span className="muted">Steam {g.steam_release}</span> : '')}</td>}
+              {has('ps5plan') && <td><Ps5Plan g={g} /></td>}
               {has('psn_rating') && <td className="num">{g.psn && g.psn.star_rating ? `${Number(g.psn.star_rating).toFixed(1)} (${g.psn.star_count})` : ''}</td>}
               {has('steam') && <td className="num">{steamPct != null ? `${steamPct}% (${steamN})` : ''}</td>}
               {compare && <td><label className="check"><input type="checkbox" checked={compare.includes(g.appid)} onChange={() => onCompare(g.appid)} /> compare</label></td>}

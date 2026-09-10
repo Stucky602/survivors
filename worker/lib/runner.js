@@ -80,6 +80,10 @@ export async function pickStage(env) {
        AND (g.last_error IS NULL OR g.last_error NOT LIKE 'tag: %daily%')`
   ).first();
   if (taggable.n > 0) return 'tag';
+  const plannable = await db.prepare(
+    `SELECT COUNT(*) AS n FROM games g JOIN steam_cache c ON c.appid = g.appid WHERE g.status = 'enriched' AND g.ppid IS NULL AND c.news_json IS NOT NULL AND g.ps5_plan_at IS NULL AND (g.last_error IS NULL OR g.last_error NOT LIKE 'plans: %daily%')`
+  ).first();
+  if (plannable.n > 0) return 'plans';
   return null;
 }
 

@@ -73,3 +73,28 @@ export function tagUser(corpus) {
   if (corpus.article) parts.push(`Article excerpt:\n${corpus.article.slice(0, 2000)}`);
   return parts.join('\n\n');
 }
+
+export const PLAN_SYSTEM = `You read a game's Steam store text and its developer news posts and report what has been said about a PlayStation 5 (or PS4) release. You never infer; you only report what the material states.
+Statuses:
+- announced_date: a specific PlayStation release date is stated. Put it in ps5_date as YYYY-MM-DD.
+- announced_window: a window is stated (a month, quarter, season, or year). Put it in ps5_window as written, e.g. "Q1 2027", "Spring 2027", "2027".
+- announced: a PlayStation version is confirmed but no date or window.
+- planned: the developer says consoles are planned, being worked on, or "coming later", without confirming PlayStation specifically.
+- not_planned: the developer says there are no plans for consoles or PlayStation.
+- unknown: nothing in the material addresses PlayStation or consoles.
+Prefer the most recent statement when statements conflict. "Console" without naming PlayStation is at most "planned". Xbox-only or Switch-only statements do not count for PlayStation.
+Answer with JSON only: {"ps5_status": "...", "ps5_date": null or "YYYY-MM-DD", "ps5_window": null or "...", "evidence": "the sentence it came from, under 300 characters", "confidence": 0 to 1}`;
+
+export function planUser(corpus) {
+  const parts = [`GAME: ${corpus.name}`];
+  if (corpus.short_description) parts.push(`Store short description: ${corpus.short_description}`);
+  if (corpus.description) parts.push(`Store description (excerpt):\n${corpus.description.slice(0, 2500)}`);
+  const news = (corpus.news || []).filter((n) => /playstation|ps5|ps4|console|sony|xbox|switch|port/i.test(`${n.title} ${n.text}`));
+  if (news.length) {
+    parts.push('Developer news posts mentioning consoles (newest first):');
+    for (const n of news.slice(0, 8)) parts.push(`- [${n.date}] ${n.title}: ${n.text.slice(0, 700)}`);
+  } else {
+    parts.push(`No developer news posts mention consoles (${(corpus.news || []).length} recent posts checked).`);
+  }
+  return parts.join('\n\n');
+}

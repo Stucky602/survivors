@@ -47,6 +47,15 @@ export async function appReviews(appid, n = 20) {
   return getJSON(`https://store.steampowered.com/appreviews/${appid}?json=1&language=english&filter=all&purchase_type=all&review_type=all&num_per_page=${n}&cursor=*`);
 }
 
+// Developer news posts. Free, keyless. Used to read out PlayStation plans ("coming to consoles in 2027").
+export async function appNews(appid, count = 12) {
+  try {
+    const j = await getJSON(`https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/?appid=${appid}&count=${count}&maxlength=1200&format=json`);
+    const items = (j && j.appnews && j.appnews.newsitems) || [];
+    return items.map((n) => ({ title: n.title, date: n.date ? new Date(n.date * 1000).toISOString().slice(0, 10) : null, text: stripHtml(String(n.contents || '').replace(/\[[^\]]*\]/g, ' ')).slice(0, 1200), feed: n.feedlabel || null }));
+  } catch { return null; }
+}
+
 // Tag vote counts are embedded in the store page as InitAppTagModal( appid, [ {tagid,name,count}, ... ] ).
 export function parseTagVotes(html) {
   const m = /InitAppTagModal\(\s*\d+\s*,\s*(\[[\s\S]*?\])\s*,/.exec(html);

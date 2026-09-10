@@ -19,7 +19,8 @@ const GAME_SELECT = `
          p.base_price, p.sale_price, p.plus_price, p.disc_perc, p.discounted_until, p.f_base, p.f_sale, p.f_plus,
          p.star_rating, p.star_count, p.psp_extra, p.psp_premium, p.lowest_ever, p.lowest_seen, p.release_date AS psn_release, p.refreshed_at,
          f.facets_json, f.evidence_json, f.proposed_json, f.score, f.category, f.confirmed_by, f.needs_review, f.tagged_at, f.model,
-         k.owned, k.never, k.note, k.want, k.want_price, k.want_at, k.verdict, g.matched_at
+         k.owned, k.never, k.note, k.want, k.want_price, k.want_at, k.verdict, g.matched_at,
+         g.ps5_plan, g.ps5_plan_date, g.ps5_plan_window, g.ps5_plan_note, g.ps5_plan_at
   FROM games g
   LEFT JOIN psn_products p ON p.ppid = g.ppid
   LEFT JOIN facets f ON f.appid = g.appid
@@ -42,7 +43,8 @@ function rowToGame(r, full = false) {
       psp_extra: !!r.psp_extra, psp_premium: !!r.psp_premium, lowest_ever: r.lowest_ever, lowest_seen: r.lowest_seen, release_date: r.psn_release, refreshed_at: r.refreshed_at
     } : null,
     facets, score: r.score, category: r.category, confirmed: !!r.confirmed_by, needs_review: !!r.needs_review, tagged_at: r.tagged_at,
-    owned: !!r.owned, never: !!r.never, note: r.note || '', want: !!r.want, want_price: r.want_price, want_at: r.want_at, verdict: r.verdict || null, matched_at: r.matched_at
+    owned: !!r.owned, never: !!r.never, note: r.note || '', want: !!r.want, want_price: r.want_price, want_at: r.want_at, verdict: r.verdict || null, matched_at: r.matched_at,
+    ps5_plan: r.ps5_plan_at ? { status: r.ps5_plan || 'unknown', date: r.ps5_plan_date, window: r.ps5_plan_window, note: r.ps5_plan_note, at: r.ps5_plan_at } : null
   };
   if (full) {
     out.evidence = r.evidence_json ? JSON.parse(r.evidence_json) : null;
@@ -54,7 +56,8 @@ function rowToGame(r, full = false) {
 
 async function listGames(env, view) {
   let where = `g.status = 'enriched'`;
-  if (view === 'upcoming') where += ` AND (g.psn_status IN ('unmatched','not_listed','review') OR p.is_preorder = 1)`;
+  if (view === 'upcoming') where += ` AND (p.is_preorder = 1 OR (g.ppid IS NULL AND g.coming_soon = 1))`;
+  else if (view === 'steamonly') where += ` AND g.ppid IS NULL AND COALESCE(g.coming_soon,0) = 0`;
   else if (view === 'sale') where += ` AND p.is_on_sale = 1 AND COALESCE(p.is_delisted,0) = 0 AND (p.discounted_until IS NULL OR p.discounted_until >= '${new Date().toISOString().replace('T', ' ').slice(0, 19)}')`;
   else if (view === 'catalog') where += ` AND g.psn_status = 'matched' AND COALESCE(p.is_delisted,0) = 0`;
   const { results } = await env.DB.prepare(`${GAME_SELECT} WHERE ${where} ORDER BY COALESCE(f.score, -1) DESC, g.name`).all();
@@ -157,6 +160,15 @@ async function handleApi(request, env, ctx) {
     if (!cand) return bad('ppid not in candidate list; re-run match');
     await acceptMatch(env, appid, cand);
     return json({ ok: true, psn_status: 'matched' });
+  }
+
+  // Hand-set a PS5 plan when you know better than the news feed.
+  if (m === 'POST' && path === '/admin/plan') {
+    const { appid, status, date, window, note } = body;
+    if (!appid) return bad('appid required');
+    await env.DB.prepare(`UPDATE games SET ps5_plan = ?, ps5_plan_date = ?, ps5_plan_window = ?, ps5_plan_note = ?, ps5_plan_at = ? WHERE appid = ?`)
+      .bind(status || 'unknown', date || null, window || null, note || null, now(), appid).run();
+    return json({ ok: true });
   }
 
   if (m === 'POST' && path === '/admin/facets') {

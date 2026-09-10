@@ -1,6 +1,6 @@
 # Survivors-like PSN tracker: architecture v0.1
 
-Status: v0.5 built Sep 10 2026. Sections 1 to 6 describe what is in the repo; sections 9 to 11 list what v0.2 to v0.4 added.
+Status: v0.6 built Sep 10 2026. Sections 1 to 6 describe what is in the repo; sections 9 to 11 list what v0.2 to v0.4 added.
 Decisions already made in chat: public site, one real user, $0/month, hybrid tagging (AI first pass, Kevin confirms high scorers), hub is both a filter and a weight.
 
 ## 1. What the site does
@@ -13,7 +13,8 @@ Four pages plus two admin pages:
 |---|---|
 | Home | What changed since the last visit: sales ending in 3 days, new sales, new PS Store listings, preorders releasing inside 30 days, the wanted list with price drops, and the best unowned fits. |
 | Compare | Two or three games side by side on every facet, price, and rating, best value per row marked. |
-| Upcoming | Steam-tagged games with no PSN listing yet, plus PSN listings flagged `IsPreorder`. Sorted by taste score, then Steam release date. |
+| Upcoming | Games not out anywhere yet, plus PS Store preorders. Real dates where they exist. |
+| On Steam | Released on Steam, no PS Store listing. Grouped by what the developer has said about a PlayStation release. |
 | On sale | Matched games where `IsOnSale = 1`, with sale end date, discount, and whether this is the lowest price the site has seen. |
 | Browse | The whole matched catalog with the facet filters and the score. |
 | Game | One game: facts, evidence, price line, links to Steam and PS Store. |
@@ -265,3 +266,16 @@ Kevin's ask: automate the whole thing, no review chores. Two changes.
 Also: errored games retry after an hour instead of a day, and "Retry errored games" on Queue resets them immediately and clears stale error notes.
 
 Deploy note: the Durable Object is created by the deploy itself (the `migrations` block in `wrangler.jsonc`). No D1 change for v0.5.
+
+
+## 13. v0.6: On Steam tab and PS5 plans (Sep 10)
+
+Kevin's ask: split the already-released Steam games out of Upcoming into their own tab, and show when each will hit PS5 if that is knowable.
+
+For matched games the date is real: PlatPrices' `ReleaseDate`, and `IsPreorder` for the not-yet-out ones. For Steam-only games there is no listing to read, so the source is what the developer has said: the game's Steam news feed (`ISteamNews/GetNewsForApp`, free and keyless, fetched during enrich into `steam_cache.news_json`) plus the store description. A new `plans` stage reads those with a short model prompt (`PLAN_SYSTEM`) into one of six statuses: `announced_date` (with a date), `announced_window` (with the window as written), `announced`, `planned` (consoles mentioned, PlayStation not confirmed), `not_planned` (the developer said so), `unknown` (nothing said). The sentence it came from is stored as evidence. The model is told never to infer; "unknown" is the honest default and shows as "Nothing announced".
+
+Stored on `games` (migration 0004: `ps5_plan`, `ps5_plan_date`, `ps5_plan_window`, `ps5_plan_note`, `ps5_plan_at`). Re-read when a game's news feed is refreshed and the last read is over 30 days old, unless a date is already announced. Hand-settable from the Game page (`POST /api/admin/plan`) for the cases where Kevin knows better than the feed.
+
+Pages: **On Steam** (`/games?view=steamonly`) groups by status in order of usefulness: date, window, announced, planned, nothing announced, not planned, and a trailing "not checked yet" group. **Upcoming** (`view=upcoming`) is now only preorders and games not out anywhere. The PlayStation column appears on both, and the Game page has a PlayStation plans line with the evidence.
+
+Enrich now makes 4 Steam fetches per game (details, reviews, tag votes, news), so its batch cap dropped from 12 to 10 (40 subrequests). The Runner picks `plans` after `tag`.

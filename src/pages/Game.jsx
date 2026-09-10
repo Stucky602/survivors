@@ -3,6 +3,7 @@ import { api, getToken, money, fmtDate, getLocalTaste, getCompare, setCompare, d
 import { CATEGORY_LABEL, Price } from '../components/GameTable.jsx';
 import Sparkline from '../components/Sparkline.jsx';
 import XpBar from '../components/XpBar.jsx';
+import Ps5Plan, { PLAN_LABEL } from '../components/Ps5Plan.jsx';
 import { FACET_KEYS_INT, scoreBreakdown, dealVerdict, VERDICTS, DEFAULT_SETTINGS } from '../../shared/score.js';
 
 const LABEL = {
@@ -16,6 +17,7 @@ export default function Game({ appid, meta }) {
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState('');
   const [ppidIn, setPpidIn] = useState('');
+  const [planEdit, setPlanEdit] = useState(null);
   const load = () => api(`/game/${appid}`).then(setD).catch((e) => setErr(e.message));
   useEffect(() => { load(); }, [appid]);
   if (err) return <p className="bar warn">{err}</p>;
@@ -38,6 +40,12 @@ export default function Game({ appid, meta }) {
     if (!ppid) return;
     setBusy('attach');
     try { await api('/admin/attach', { method: 'POST', admin: true, body: { appid, ppid } }); setPpidIn(''); await load(); }
+    catch (e) { setErr(e.message); }
+    setBusy('');
+  };
+  const savePlan = async () => {
+    setBusy('plan');
+    try { await api('/admin/plan', { method: 'POST', admin: true, body: { appid, ...planEdit } }); setPlanEdit(null); await load(); }
     catch (e) { setErr(e.message); }
     setBusy('');
   };
@@ -90,6 +98,20 @@ export default function Game({ appid, meta }) {
           ) : (
             <>
               <p className="muted">{g.psn_status === 'review' ? 'A candidate match is waiting in Queue.' : g.psn_status === 'not_listed' ? 'No PS Store listing found. Rechecked weekly.' : 'Not matched yet.'} <a href={`https://store.playstation.com/en-us/search/${encodeURIComponent(g.name)}`} target="_blank" rel="noreferrer">Search the PS Store</a></p>
+              <dl>
+                <dt>PlayStation plans</dt><dd><Ps5Plan g={g} long />{g.ps5_plan ? <span className="muted"> (read {fmtDate(g.ps5_plan.at)})</span> : null}</dd>
+              </dl>
+              {admin && !planEdit && <div className="actions"><button onClick={() => setPlanEdit({ status: g.ps5_plan?.status || 'unknown', date: g.ps5_plan?.date || '', window: g.ps5_plan?.window || '', note: g.ps5_plan?.note || '' })}>Set plan by hand</button></div>}
+              {admin && planEdit && (
+                <div className="actions">
+                  <select value={planEdit.status} onChange={(e) => setPlanEdit({ ...planEdit, status: e.target.value })}>{Object.entries(PLAN_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
+                  <input type="date" value={planEdit.date} onChange={(e) => setPlanEdit({ ...planEdit, date: e.target.value })} />
+                  <input type="text" placeholder="window, e.g. Q1 2027" value={planEdit.window} onChange={(e) => setPlanEdit({ ...planEdit, window: e.target.value })} />
+                  <input type="text" placeholder="source note" value={planEdit.note} onChange={(e) => setPlanEdit({ ...planEdit, note: e.target.value })} />
+                  <button className="primary" onClick={savePlan} disabled={!!busy}>Save</button>
+                  <button onClick={() => setPlanEdit(null)}>Cancel</button>
+                </div>
+              )}
               {admin && (
                 <div className="actions">
                   <input type="number" placeholder="PlatPrices ppid" value={ppidIn} onChange={(e) => setPpidIn(e.target.value)} />

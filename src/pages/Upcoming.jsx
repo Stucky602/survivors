@@ -8,21 +8,18 @@ export default function Upcoming({ meta }) {
   useEffect(() => { api('/games?view=upcoming').then((d) => setGames(d.games)).catch((e) => setErr(e.message)); }, []);
   if (err) return <p className="bar warn">{err}</p>;
   if (!games) return <p className="muted">Loading the run</p>;
-  const preorders = games.filter((g) => g.psn && g.psn.is_preorder);
-  const waiting = games.filter((g) => !g.psn || !g.psn.is_preorder).filter((g) => !g.owned);
-  const parseDate = (x) => { const t = Date.parse(x || ''); return Number.isFinite(t) ? t : 0; };
-  const comingSoon = waiting.filter((g) => g.coming_soon).sort((a, b) => parseDate(a.steam_release) - parseDate(b.steam_release));
-  const onSteam = waiting.filter((g) => !g.coming_soon);
+  const parseDate = (x) => { const t = Date.parse(x || ''); return Number.isFinite(t) ? t : 9e15; };
+  const preorders = games.filter((g) => g.psn && g.psn.is_preorder).sort((a, b) => String(a.psn.release_date).localeCompare(String(b.psn.release_date)));
+  const notOut = games.filter((g) => !(g.psn && g.psn.is_preorder)).filter((g) => !g.owned).sort((a, b) => parseDate(a.steam_release) - parseDate(b.steam_release));
   return (
     <>
       <h1>Upcoming</h1>
-      <h2>Preorder on the PS Store</h2>
-      <GameTable games={preorders} columns={['score', 'category', 'price', 'release', 'steam']} empty="No preorders in the tracked set." />
-      <h2>Not out on Steam yet either</h2>
-      <GameTable games={comingSoon} columns={['score', 'category', 'release', 'steam']} empty="No unreleased games in the tracked set." />
-      <h2>Out on Steam, no PS Store listing yet</h2>
-      <p className="muted">{meta && meta.has_platprices_key === false ? 'These have not been checked against the PS Store yet: the Match step is waiting on the PlatPrices key. Many of them are on PS5; they move to the PS Store page as soon as matching runs. ' : 'Sorted by taste score. Unmatched games get rechecked weekly. Best fits here are the ports worth waiting for.'}</p>
-      <GameTable games={onSteam} columns={['score', 'category', 'release', 'steam']} empty="Every tracked game has a PS Store listing." />
+      <p className="muted">Games not out yet. Already-released Steam games waiting on a port are under <a href="#/onsteam">On Steam</a>.</p>
+      <h2>Preorder on the PS Store ({preorders.length})</h2>
+      <GameTable games={preorders} columns={['score', 'category', 'price', 'ps5plan', 'steam']} empty="No preorders in the tracked set." />
+      <h2>Not out anywhere yet ({notOut.length})</h2>
+      <p className="muted">Sorted by Steam release date where one is given. The PlayStation column shows what the developer has said.</p>
+      <GameTable games={notOut} columns={['score', 'category', 'release', 'ps5plan']} empty="No unreleased games in the tracked set." />
     </>
   );
 }
