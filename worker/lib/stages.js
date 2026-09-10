@@ -303,6 +303,15 @@ export async function plans(env, opts = {}) {
   });
 }
 
+// Queue every unconfirmed game for a fresh tag pass (e.g. after switching the tagging model).
+// Old facets stay visible until the new ones replace them; confirmed facets are never touched.
+export async function retag(env) {
+  return withRun(env.DB, 'retag', async () => {
+    const r = await env.DB.prepare(`UPDATE facets SET reviews_at_tag = -100000, needs_review = 0 WHERE confirmed_by IS NULL`).run();
+    return { count: r.meta.changes, note: 'queued for re-tag; the Runner picks them up' };
+  });
+}
+
 // Reset errored games so they get retried now, and clear stale error text on healthy rows.
 export async function retryErrors(env) {
   return withRun(env.DB, 'retry-errors', async () => {
@@ -336,4 +345,4 @@ export async function rescore(env) {
   });
 }
 
-export const STAGES = { discover, enrich, match, refresh, tag, plans, rescore, 'retry-errors': retryErrors };
+export const STAGES = { discover, enrich, match, refresh, tag, plans, rescore, retag, 'retry-errors': retryErrors };

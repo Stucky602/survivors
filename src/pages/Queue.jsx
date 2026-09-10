@@ -59,7 +59,7 @@ export default function Queue({ meta, onChange }) {
       {err && <p className="bar warn">{err}</p>}
 
       <h2>Auto-run</h2>
-      {meta && meta.plan ? <p className="muted">Cloudflare plan: {meta.plan}{meta.plan === 'free' ? ' (small batches, 50-fetch cap)' : ' (large batches)'}. Tagging with {meta.tagger}.</p> : null}
+      {meta && meta.plan ? <p className="muted">Cloudflare plan: {meta.plan}{meta.plan === 'free' ? ' (small batches, 50-fetch cap)' : ' (large batches)'}. Tagging with {meta.tagger}.{meta.counts ? ` ${meta.counts.tagged || 0} games scored, ${meta.counts.tagged_claude || 0} of them by Claude${meta.counts.retag_pending ? `, ${meta.counts.retag_pending} waiting for a re-score` : ''}.` : ''}</p> : null}
       {runner && runner.unavailable ? <p className="bar warn">The Runner isn't deployed yet. Push the latest repo; the deploy creates it.</p> : (
         <>
           <p className="muted">One button. The Runner works through Discover, Enrich, Match, Tag, and PS Store plans in the background, one batch every 45 seconds, and stops on its own when everything is done. Cron restarts it every day; you only press this for the first backfill or after a change.</p>
@@ -81,6 +81,7 @@ export default function Queue({ meta, onChange }) {
       <div className="actions wrap">
         {STAGES.map((s) => <span key={s} className="pair"><button onClick={() => run(s)} disabled={!!busy}>{busy === s ? `${LABEL[s]}…` : LABEL[s]}</button><button onClick={() => run(s, true)} disabled={!!busy || s === 'refresh' || s === 'rescore'} title="Run until empty">↻</button></span>)}
         <button onClick={() => run('retry-errors')} disabled={!!busy}>Retry errored games</button>
+        <button onClick={() => { if (confirm('Queue every unconfirmed game for a fresh tag pass with the current model? Old scores stay until replaced.')) run('retag'); }} disabled={!!busy}>Re-score all with current model</button>
       </div>
       {log.length > 0 && <pre className="log">{log.join('\n')}</pre>}
 

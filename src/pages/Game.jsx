@@ -173,7 +173,7 @@ export default function Game({ appid, meta }) {
                 <dt>Run length</dt><dd>{f.run_length_minutes ? `${f.run_length_minutes} min` : 'not stated'}</dd>
                 <dt>Co-op</dt><dd>{f.coop}</dd>
                 <dt>Counts</dt><dd>{Object.entries(f.counts).filter(([, v]) => v != null).map(([k, v]) => `${v} ${k}`).join(', ') || 'not stated'}</dd>
-                <dt>Model</dt><dd className="muted">{g.model || '–'}</dd>
+                <dt>Scored by</dt><dd className="muted">{g.model ? (/^claude/.test(g.model) ? `Claude (${g.model})` : `Workers AI (${g.model.replace('@cf/', '')})`) : '–'}</dd>
               </dl>
             </>
           ) : <p className="muted">Not tagged yet. The tag stage runs daily; an admin can run it from Queue.</p>}

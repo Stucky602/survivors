@@ -90,6 +90,9 @@ async function handleApi(request, env, ctx) {
     const counts = await env.DB.prepare(
       `SELECT SUM(status='enriched') AS enriched, SUM(status='new') AS pending, SUM(status='error') AS errors, SUM(psn_status='matched') AS matched, SUM(psn_status='not_listed') AS not_listed, SUM(psn_status='review') AS review, COUNT(*) AS total,
               (SELECT COUNT(*) FROM facets WHERE needs_review = 1) AS facets_review,
+              (SELECT COUNT(*) FROM facets) AS tagged,
+              (SELECT COUNT(*) FROM facets WHERE model LIKE 'claude%') AS tagged_claude,
+              (SELECT COUNT(*) FROM facets WHERE reviews_at_tag < 0 AND confirmed_by IS NULL) AS retag_pending,
               (SELECT COUNT(*) FROM psn_products WHERE is_on_sale = 1 AND COALESCE(is_delisted,0) = 0 AND (discounted_until IS NULL OR discounted_until >= '${nowStamp()}')) AS on_sale
        FROM games`
     ).first();
