@@ -73,17 +73,17 @@ export default function Queue({ meta, onChange }) {
       <div className="scope" role="tablist">
         {SCOPES.map(([k, label, hint]) => <button key={k} role="tab" aria-selected={scope === k} className={scope === k ? 'on' : ''} onClick={() => setScope(k)} title={hint}>{label}</button>)}
       </div>
-      <p className="muted">Applies to Run everything and to every stage button below. {SCOPES.find(([k]) => k === scope)[2]}.{runner && runner.running && runner.scope !== scope ? ` The Runner is currently going with "${SCOPES.find(([k]) => k === runner.scope)?.[1] || runner.scope}"; stop and start it to switch.` : ''}</p>
+      <p className="muted">Applies to the run button and to every stage button below. {SCOPES.find(([k]) => k === scope)[2]}.{runner && runner.running && runner.scope !== scope ? ` The Runner is currently going with "${SCOPES.find(([k]) => k === runner.scope)?.[1] || runner.scope}"; stop and start it to switch.` : ''}</p>
 
       <h2>Auto-run</h2>
-      {meta && meta.plan ? <p className="muted">Cloudflare plan: {meta.plan}{meta.plan === 'free' ? ' (small batches, 50-fetch cap)' : ' (large batches)'}. Tagging with {meta.tagger}.{meta.counts ? ` ${meta.counts.tagged || 0} games scored, ${meta.counts.tagged_claude || 0} of them by Claude${meta.counts.retag_pending ? `, ${meta.counts.retag_pending} waiting for a re-score` : ''}.` : ''}</p> : null}
+      {meta && meta.plan ? <p className="muted">Cloudflare plan: <b>{meta.plan}</b>{meta.plan === 'free' ? ' (small batches, 50-fetch cap). If the account is on Workers Paid, set the worker variable PLAN to paid; the upgrade does not reach the code until then.' : ' (large batches).'} Tagging with {meta.tagger}.{meta.counts ? ` ${meta.counts.tagged || 0} games scored, ${meta.counts.tagged_claude || 0} of them by Claude${meta.counts.retag_pending ? `, ${meta.counts.retag_pending} waiting for a re-score` : ''}.` : ''}</p> : null}
       {runner && runner.unavailable ? <p className="bar warn">The Runner isn't deployed yet. Push the latest repo; the deploy creates it.</p> : (
         <>
-          <p className="muted">One button. The Runner works through Discover, Enrich, Match, Tag, and PS Store plans in the background, one batch every 45 seconds, and stops on its own when everything is done. Cron restarts it every day; you only press this for the first backfill or after a change.</p>
+          <p className="muted">One button. The Runner works through Discover, Enrich, Match, Tag, and PS Store plans for the selected scope in the background, one batch at a time, and stops on its own when that scope is done. Cron restarts it every day; you only press this for the first backfill or after a change.</p>
           <div className="actions">
             {runner && runner.running
               ? <button onClick={() => runnerCmd('stop')} disabled={!!busy}>Stop</button>
-              : <button className="primary" onClick={() => runnerCmd('start')} disabled={!!busy}>Run everything</button>}
+              : <button className="primary" onClick={() => runnerCmd('start')} disabled={!!busy}>{scope === 'all' ? 'Run everything' : `Run ${SCOPES.find(([k]) => k === scope)[1].toLowerCase()}`}</button>}
             {runner && <span className="muted">
               {runner.running ? `Running ${SCOPES.find(([k]) => k === runner.scope)?.[1]?.toLowerCase() || runner.scope}, batch ${runner.ticks}.` : 'Idle.'}
               {runner.ai_capped_until ? ` Today's free AI allocation is used up; tagging and plans resume after ${runner.ai_capped_until.slice(11, 16)} UTC${runner.running ? ' (the Runner wakes itself then)' : ''}.` : runner.pending ? ` Next up: ${runner.pending}.` : runner.running ? '' : ' Nothing pending.'}
@@ -96,7 +96,7 @@ export default function Queue({ meta, onChange }) {
               <div className="progress-text">
                 <span>{Math.round((runner.progress || 0) * 100)}%{runner.start_total ? `, ${runner.done} of ${runner.start_total} items` : ''}{runner.eta_seconds != null && runner.running ? `, ${fmtEta(runner.eta_seconds)} left` : ''}</span>
                 <span className="muted">
-                  {[['discover', 'pages'], ['enrich', 'to enrich'], ['match', 'to match'], ['tag', 'to score'], ['plans', 'plans to read']].filter(([k]) => runner.pending_counts[k] > 0).map(([k, label]) => `${runner.pending_counts[k]} ${label}`).join(', ') || 'nothing left'}
+                  {[['discover', 'pages'], ['enrich', 'to enrich'], ['match', 'to match'], ['tag', 'to tag'], ['plans', 'plans to read']].filter(([k]) => runner.pending_counts[k] > 0).map(([k, label]) => `${runner.pending_counts[k]} ${label}`).join(', ') || 'nothing left'}
                   {runner.pending_counts.tag_blocked || runner.pending_counts.plans_blocked ? ` (${runner.pending_counts.tag_blocked + runner.pending_counts.plans_blocked} waiting on the AI allocation)` : ''}
                 </span>
               </div>
