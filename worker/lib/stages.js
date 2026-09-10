@@ -25,25 +25,34 @@ async function withRun(db, stage, fn) {
 }
 
 // 1. Discover: walk the Steam search for each configured tag and insert unseen appids.
+// Cloudflare's free plan caps a Worker invocation at 50 subrequests, so this does a few pages per call
+// and stores a cursor. Click again (or use the ↻ button) to continue; the cron tick resumes it too.
+const PAGES_PER_RUN = 6; // 6 pages x however many tags, plus one D1 write each, stays well under 50 fetches
 export async function discover(env, opts = {}) {
   return withRun(env.DB, 'discover', async () => {
-    const tags = await getSetting(env.DB, 'steam_tags', []);
+    const tags = (await getSetting(env.DB, 'steam_tags', [])).filter((t) => t.id);
     const extra = await getSetting(env.DB, 'extra_appids', []);
-    const maxPages = Number(opts.maxPages) || 20;
-    let added = 0, seen = 0;
-    for (const t of tags) {
-      if (!t.id) continue;
-      for (let page = 0; page < maxPages; page++) {
-        const { items, total } = await steam.searchByTag(t.id, page * 50, 50);
-        seen += items.length;
-        await steam.pause(250);
-        for (const it of items) if (await upsertGameFromSteamSearch(env.DB, { ...it, source: `tag:${t.name}` })) added++;
-        if (items.length < 50 || (page + 1) * 50 >= total) break;
-      }
+    const cursor = await getSetting(env.DB, 'discover_cursor', { tag: 0, page: 0 });
+    if (opts.reset) { cursor.tag = 0; cursor.page = 0; }
+    let added = 0, seen = 0, pagesThisRun = 0, done = false;
+    let ti = Math.min(cursor.tag, tags.length);
+    let pg = cursor.page;
+    while (ti < tags.length && pagesThisRun < PAGES_PER_RUN) {
+      const t = tags[ti];
+      const { items, total } = await steam.searchByTag(t.id, pg * 50, 50);
+      seen += items.length;
+      pagesThisRun++;
+      for (const it of items) if (await upsertGameFromSteamSearch(env.DB, { ...it, source: `tag:${t.name}` })) added++;
+      const lastPage = items.length < 50 || (pg + 1) * 50 >= total;
+      if (lastPage) { ti++; pg = 0; } else { pg++; }
+      if (pagesThisRun < PAGES_PER_RUN) await steam.pause(250);
     }
-    for (const appid of extra) if (await upsertGameFromSteamSearch(env.DB, { appid: Number(appid), name: `app ${appid}`, source: 'manual' })) added++;
-    if (tags.length && seen === 0) throw new Error('Steam search returned no items for any tag; the search HTML may have changed');
-    return { count: added, note: `seen ${seen}` };
+    if (ti >= tags.length) { done = true; ti = 0; pg = 0; }
+    await setSetting(env.DB, 'discover_cursor', { tag: ti, page: pg });
+    // Extra appids only need doing once, when we've finished a full sweep.
+    if (done) for (const appid of extra) if (await upsertGameFromSteamSearch(env.DB, { appid: Number(appid), name: `app ${appid}`, source: 'manual' })) added++;
+    if (tags.length && seen === 0 && !done) throw new Error('Steam search returned no items; the search HTML may have changed');
+    return { count: added, note: done ? `swept all tags, seen ${seen} this pass` : `seen ${seen}, more pages queued (tag ${ti}, page ${pg})` };
   });
 }
 

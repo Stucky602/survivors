@@ -28,7 +28,9 @@ export default function Queue({ meta, onChange }) {
         rounds++;
         total += r.count || 0;
         setLog((l) => [`${stage}: ${r.ok ? 'ok' : 'failed'} ${r.count ?? ''} ${r.note || r.error || ''}`, ...l].slice(0, 30));
-        if (!r.ok || !loop || (r.count || 0) === 0 || rounds >= 40) break;
+        const morePages = stage === 'discover' && r.ok && /more pages queued/.test(r.note || '');
+        if (!r.ok || !loop || rounds >= 40) break;
+        if (!morePages && (r.count || 0) === 0) break;
       } while (true);
     } catch (e) { setLog((l) => [`${stage}: ${e.message}`, ...l]); }
     setBusy('');
@@ -49,7 +51,7 @@ export default function Queue({ meta, onChange }) {
       <h2>Run a stage</h2>
       <p className="muted">Each click runs one batch of {meta ? 25 : 25}. "Run until empty" keeps going while a stage still has work, up to 40 batches. Cron does this on its own daily.</p>
       <div className="actions wrap">
-        {STAGES.map((s) => <span key={s} className="pair"><button onClick={() => run(s)} disabled={!!busy}>{busy === s ? `${s}…` : s}</button><button onClick={() => run(s, true)} disabled={!!busy || s === 'discover' || s === 'refresh' || s === 'rescore'} title="Run until empty">↻</button></span>)}
+        {STAGES.map((s) => <span key={s} className="pair"><button onClick={() => run(s)} disabled={!!busy}>{busy === s ? `${s}…` : s}</button><button onClick={() => run(s, true)} disabled={!!busy || s === 'refresh' || s === 'rescore'} title="Run until empty">↻</button></span>)}
       </div>
       {log.length > 0 && <pre className="log">{log.join('\n')}</pre>}
 

@@ -1,6 +1,6 @@
 # Survivors-like PSN tracker: architecture v0.1
 
-Status: v0.4 built Sep 10 2026. Sections 1 to 6 describe what is in the repo; sections 9 to 11 list what v0.2 to v0.4 added.
+Status: v0.4.1 built Sep 10 2026. Sections 1 to 6 describe what is in the repo; sections 9 to 11 list what v0.2 to v0.4 added.
 Decisions already made in chat: public site, one real user, $0/month, hybrid tagging (AI first pass, Kevin confirms high scorers), hub is both a filter and a weight.
 
 ## 1. What the site does
@@ -241,3 +241,8 @@ Site side:
 - Nav badges: live sale count on On sale; matches plus facets waiting on Queue (admin only).
 - Sticky header; the nav scrolls sideways on narrow phones instead of wrapping.
 - PWA manifest and icons, so the site can sit on the iPhone home screen as an app.
+
+
+### 11a. v0.4.1 fix (Sep 10)
+
+Discover hit Cloudflare's 50-subrequest-per-invocation limit on the free plan because it walked every page of every tag in one call. It now does 6 pages per invocation, stores a cursor in `settings.discover_cursor`, and resumes on the next click, the ↻ button, or the next cron tick. `discover` with `{reset:true}` starts a sweep over. The ↻ button is enabled for discover now and loops until the sweep reports it swept all tags. A full sweep of ~700 games is a dozen or so ↻ rounds, or it just finishes over a few daily cron ticks on its own.
