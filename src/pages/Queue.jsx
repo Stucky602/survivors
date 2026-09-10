@@ -3,6 +3,7 @@ import { api, getToken } from '../api.js';
 import FacetEditor from '../components/FacetEditor.jsx';
 
 const STAGES = ['discover', 'enrich', 'match', 'refresh', 'tag', 'rescore'];
+const LABEL = { discover: 'Discover', enrich: 'Enrich', match: 'Match', refresh: 'Refresh', tag: 'Tag', rescore: 'Rescore' };
 
 export default function Queue({ meta, onChange }) {
   const [q, setQ] = useState(null);
@@ -11,7 +12,16 @@ export default function Queue({ meta, onChange }) {
   const [log, setLog] = useState([]);
   const [open, setOpen] = useState(null);
   const [single, setSingle] = useState(null);
+  const [runner, setRunner] = useState(null);
   const hashArg = location.hash.split('/')[2];
+  const runnerStatus = () => api('/admin/runner/status', { admin: true }).then(setRunner).catch(() => setRunner({ unavailable: true }));
+  useEffect(() => {
+    if (!getToken()) return;
+    runnerStatus();
+    const t = setInterval(() => { runnerStatus(); if (runner && runner.running) { load(); onChange && onChange(); } }, 20000);
+    return () => clearInterval(t);
+  }, []);
+  const runnerCmd = async (cmd) => { setBusy('runner'); try { await api(`/admin/runner/${cmd}`, { method: 'POST', admin: true, body: {} }); await runnerStatus(); } catch (e) { setErr(e.message); } setBusy(''); };
 
   const load = () => api('/admin/queue', { admin: true }).then(setQ).catch((e) => setErr(e.message));
   useEffect(() => { if (getToken()) load(); }, []);
@@ -48,10 +58,28 @@ export default function Queue({ meta, onChange }) {
       <h1>Queue</h1>
       {err && <p className="bar warn">{err}</p>}
 
-      <h2>Run a stage</h2>
-      <p className="muted">Each click runs one batch of {meta ? 25 : 25}. "Run until empty" keeps going while a stage still has work, up to 40 batches. Cron does this on its own daily.</p>
+      <h2>Auto-run</h2>
+      {runner && runner.unavailable ? <p className="bar warn">The Runner isn't deployed yet. Push the latest repo; the deploy creates it.</p> : (
+        <>
+          <p className="muted">One button. The Runner works through Discover, Enrich, Match, and Tag in the background, one batch every 45 seconds, and stops on its own when everything is done. Cron restarts it every day; you only press this for the first backfill or after a change.</p>
+          <div className="actions">
+            {runner && runner.running
+              ? <button onClick={() => runnerCmd('stop')} disabled={!!busy}>Stop</button>
+              : <button className="primary" onClick={() => runnerCmd('start')} disabled={!!busy}>Run everything</button>}
+            {runner && <span className="muted">
+              {runner.running ? `Running, batch ${runner.ticks}, next in under a minute.` : 'Idle.'}
+              {runner.pending ? ` Next up: ${runner.pending}.` : runner.running ? '' : ' Nothing pending.'}
+              {runner.last && runner.last.stage !== 'idle' ? ` Last: ${runner.last.stage} ${runner.last.ok ? 'ok' : 'failed'} ${runner.last.count}${runner.last.note ? `, ${runner.last.note}` : ''}.` : ''}
+            </span>}
+          </div>
+        </>
+      )}
+
+      <h3>Run one stage by hand</h3>
+      <p className="muted">For poking at a single step. The plain button runs one batch; ↻ repeats until that stage is empty.</p>
       <div className="actions wrap">
-        {STAGES.map((s) => <span key={s} className="pair"><button onClick={() => run(s)} disabled={!!busy}>{busy === s ? `${s}…` : s}</button><button onClick={() => run(s, true)} disabled={!!busy || s === 'refresh' || s === 'rescore'} title="Run until empty">↻</button></span>)}
+        {STAGES.map((s) => <span key={s} className="pair"><button onClick={() => run(s)} disabled={!!busy}>{busy === s ? `${LABEL[s]}…` : LABEL[s]}</button><button onClick={() => run(s, true)} disabled={!!busy || s === 'refresh' || s === 'rescore'} title="Run until empty">↻</button></span>)}
+        <button onClick={() => run('retry-errors')} disabled={!!busy}>Retry errored games</button>
       </div>
       {log.length > 0 && <pre className="log">{log.join('\n')}</pre>}
 
@@ -71,8 +99,8 @@ export default function Queue({ meta, onChange }) {
 
       {q && (
         <>
-          <h2>PS Store matches to confirm ({q.matches.length})</h2>
-          {q.matches.length === 0 && <p className="empty">No matches waiting.</p>}
+          <h2>PS Store matches parked for a decision ({q.matches.length})</h2>
+          {q.matches.length === 0 && <p className="empty">None. In automatic mode the model's pick is accepted at 70% confidence or better and anything weaker is treated as not on PSN and rechecked weekly. A wrong match can be fixed from the game's page with "Attach this listing".</p>}
           {q.matches.map((mrow) => (
             <div key={mrow.appid} className="queue-item">
               <p><b>{mrow.name}</b> <span className="muted">{mrow.developer}, Steam {mrow.steam_release}</span></p>
@@ -93,8 +121,8 @@ export default function Queue({ meta, onChange }) {
             </div>
           ))}
 
-          <h2>Facets to confirm ({q.facets.length})</h2>
-          {q.facets.length === 0 && <p className="empty">No first-pass tags waiting. The tagger sends games scoring {meta?.taste?.queue_threshold ?? 70} or higher here.</p>}
+          <h2>Tags flagged for a look ({q.facets.length})</h2>
+          {q.facets.length === 0 && <p className="empty">Nothing flagged. In automatic mode the model's tags stand on their own; you can still edit any game's facets from its page. Switch to hybrid mode in Settings if you want high scorers parked here for a check first.</p>}
           {q.facets.map((g) => (
             <div key={g.appid} className="queue-item">
               <p><b><a href={`#/game/${g.appid}`}>{g.name}</a></b> <span className="score">{g.score}</span> <span className="muted">{g.category}</span> {g.proposed ? <span className="flag">rerun proposed changes</span> : null}</p>
@@ -105,6 +133,7 @@ export default function Queue({ meta, onChange }) {
           ))}
 
           <h2>Errors ({q.errors.length})</h2>
+          {q.errors.length > 0 && <p className="muted">These retry on their own within the hour. "Retry errored games" above does it now.</p>}
           {q.errors.length === 0 ? <p className="empty">No errors recorded.</p> : (
             <table className="plain"><tbody>{q.errors.map((e) => <tr key={e.appid}><td><a href={`#/game/${e.appid}`}>{e.name}</a></td><td className="muted">{e.status} / {e.psn_status}</td><td className="ev">{e.last_error}</td></tr>)}</tbody></table>
           )}

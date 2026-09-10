@@ -57,13 +57,15 @@ export async function discover(env, opts = {}) {
 }
 
 // 2. Enrich: appdetails + reviews + tag votes for new games, and games not enriched in 7 days.
+// 3 Steam fetches per game, so the batch is capped hard at 12 to stay under the 50-subrequest invocation limit.
+const ENRICH_MAX = 12;
 export async function enrich(env, opts = {}) {
   return withRun(env.DB, 'enrich', async () => {
-    const limit = limitOf(env, opts.limit);
+    const limit = Math.min(ENRICH_MAX, limitOf(env, opts.limit));
     const { results } = await env.DB.prepare(
       `SELECT appid FROM games WHERE (status = 'new' OR (status = 'error' AND COALESCE(error_count,0) < ${MAX_ERRORS} AND (last_enriched IS NULL OR last_enriched < ?)) OR (status = 'enriched' AND (last_enriched IS NULL OR last_enriched < ?)))
        ORDER BY CASE status WHEN 'new' THEN 0 WHEN 'error' THEN 1 ELSE 2 END, last_enriched LIMIT ?`
-    ).bind(daysFromNow(-1), daysFromNow(-7), limit).all();
+    ).bind(daysFromNow(-1 / 24), daysFromNow(-7), limit).all();
     let n = 0;
     const over = budgetClock();
     for (const { appid } of results) {
@@ -134,9 +136,11 @@ export async function match(env, opts = {}) {
         const conf = Number(pick.confidence) || 0;
         await env.DB.prepare(`INSERT INTO match_candidates (appid, candidates_json, ai_json, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(appid) DO UPDATE SET candidates_json = excluded.candidates_json, ai_json = excluded.ai_json, created_at = excluded.created_at`)
           .bind(g.appid, JSON.stringify(cands.slice(0, 40)), JSON.stringify(pick), now()).run();
-        if (chosen && conf >= 0.9) {
+        const mode = await getSetting(env.DB, 'review_mode', 'auto');
+        const acceptAt = mode === 'auto' ? 0.7 : 0.9;
+        if (chosen && conf >= acceptAt) {
           await acceptMatch(env, g.appid, chosen);
-        } else if (chosen && conf >= 0.6) {
+        } else if (chosen && conf >= 0.5 && mode !== 'auto') {
           await env.DB.prepare(`UPDATE games SET psn_status = 'review', next_match_at = NULL WHERE appid = ?`).bind(g.appid).run();
         } else {
           await env.DB.prepare(`UPDATE games SET psn_status = 'not_listed', next_match_at = ? WHERE appid = ?`).bind(daysFromNow(7), g.appid).run();
@@ -223,7 +227,8 @@ export async function tag(env, opts = {}) {
         const { score } = scoreGame(facets, settings);
         const kevin = (await env.DB.prepare('SELECT owned, never FROM kevin WHERE appid = ?').bind(g.appid).first()) || {};
         const category = categorize(facets, score, q.reviews, kevin, settings);
-        const review = needsReview(facets, score, settings) ? 1 : 0;
+        const mode = await getSetting(env.DB, 'review_mode', 'auto');
+        const review = mode !== 'auto' && needsReview(facets, score, settings) ? 1 : 0;
         if (g.has_facets && g.confirmed_by) {
           await env.DB.prepare(`UPDATE facets SET proposed_json = ?, needs_review = 1 WHERE appid = ?`).bind(JSON.stringify({ facets, evidence, model: ai.model, at: now() }), g.appid).run();
         } else {
@@ -236,10 +241,22 @@ export async function tag(env, opts = {}) {
         }
         n++;
       } catch (e) {
-        await env.DB.prepare(`UPDATE games SET last_error = ? WHERE appid = ?`).bind(`tag: ${String(e.message || e).slice(0, 280)}`, g.appid).run();
+        const msg = String(e.message || e);
+        const capped = /quota|limit|429|exceed|neurons|allocation/i.test(msg);
+        await env.DB.prepare(`UPDATE games SET last_error = ? WHERE appid = ?`).bind(`tag: ${capped ? 'daily AI allocation reached, ' : ''}${msg.slice(0, 240)}`, g.appid).run();
+        if (capped) return { count: n, note: 'daily AI allocation reached, resumes tomorrow' };
       }
     }
     return { count: n };
+  });
+}
+
+// Reset errored games so they get retried now, and clear stale error text on healthy rows.
+export async function retryErrors(env) {
+  return withRun(env.DB, 'retry-errors', async () => {
+    const a = await env.DB.prepare(`UPDATE games SET status = 'new', error_count = 0, last_error = NULL, last_enriched = NULL WHERE status = 'error'`).run();
+    const b = await env.DB.prepare(`UPDATE games SET last_error = NULL WHERE status = 'enriched' AND last_error IS NOT NULL`).run();
+    return { count: a.meta.changes, note: `${b.meta.changes} stale error notes cleared` };
   });
 }
 
@@ -265,4 +282,4 @@ export async function rescore(env) {
   });
 }
 
-export const STAGES = { discover, enrich, match, refresh, tag, rescore };
+export const STAGES = { discover, enrich, match, refresh, tag, rescore, 'retry-errors': retryErrors };

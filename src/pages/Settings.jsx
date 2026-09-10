@@ -23,7 +23,7 @@ export default function Settings({ meta, onChange }) {
   const saveTaste = async (rescore) => {
     setMsg('');
     try {
-      await api('/admin/settings', { method: 'PUT', admin: true, body: { taste: s.taste, steam_tags: s.steam_tags, extra_appids: s.extra_appids } });
+      await api('/admin/settings', { method: 'PUT', admin: true, body: { taste: s.taste, steam_tags: s.steam_tags, extra_appids: s.extra_appids, review_mode: s.review_mode || 'auto' } });
       setLocalTaste(null);
       if (rescore) { const r = await api('/admin/run/rescore', { method: 'POST', admin: true, body: {} }); setMsg(`Saved. Rescored ${r.count} games.`); } else setMsg('Saved.');
       onChange && onChange();
@@ -100,6 +100,14 @@ export default function Settings({ meta, onChange }) {
           <p className="muted">Games the tag search misses. One appid per line.</p>
           <textarea rows="3" value={s.extra_appids.join('\n')} onChange={(e) => setS({ ...s, extra_appids: e.target.value.split(/\s+/).filter(Boolean) })} />
           <div className="actions"><button className="primary" onClick={() => saveTaste(false)}>Save tags and appids</button></div>
+
+          <h2>Review mode</h2>
+          <p className="muted">Automatic: the model's tags and PS Store matches stand, nothing waits on you. Hybrid: games scoring at or above the queue threshold, and matches between 50% and 90% confidence, park in Queue for a look first.</p>
+          <div className="actions">
+            <button className={(s.review_mode || 'auto') === 'auto' ? 'on' : ''} onClick={() => setS({ ...s, review_mode: 'auto' })}>Automatic</button>
+            <button className={s.review_mode === 'hybrid' ? 'on' : ''} onClick={() => setS({ ...s, review_mode: 'hybrid' })}>Hybrid</button>
+            <button className="primary" onClick={() => saveTaste(false)}>Save</button>
+          </div>
 
           <h2>PS Plus</h2>
           <p className="muted">Which catalog you pay for. Games in it get a PS Plus mark and a filter in Browse. Stored in this browser only.</p>

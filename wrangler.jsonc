@@ -18,6 +18,8 @@
     }
   ],
   "ai": { "binding": "AI" },
+  "durable_objects": { "bindings": [{ "name": "RUNNER", "class_name": "Runner" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Runner"] }],
   "triggers": {
     // 09:00 UTC discover + price refresh, 09:30 enrich + match + tag, 21:00 retry pass
     "crons": ["0 9 * * *", "30 9 * * *", "0 21 * * *"]
@@ -25,7 +27,7 @@
   "vars": {
     "REGION": "US",
     "AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-    "BATCH_LIMIT": "25"
+    "BATCH_LIMIT": "12"
   },
   "observability": { "enabled": true },
   "workers_dev": true

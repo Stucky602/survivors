@@ -1,6 +1,6 @@
 # Survivors-like PSN tracker: architecture v0.1
 
-Status: v0.4.1 built Sep 10 2026. Sections 1 to 6 describe what is in the repo; sections 9 to 11 list what v0.2 to v0.4 added.
+Status: v0.5 built Sep 10 2026. Sections 1 to 6 describe what is in the repo; sections 9 to 11 list what v0.2 to v0.4 added.
 Decisions already made in chat: public site, one real user, $0/month, hybrid tagging (AI first pass, Kevin confirms high scorers), hub is both a filter and a weight.
 
 ## 1. What the site does
@@ -246,3 +246,22 @@ Site side:
 ### 11a. v0.4.1 fix (Sep 10)
 
 Discover hit Cloudflare's 50-subrequest-per-invocation limit on the free plan because it walked every page of every tag in one call. It now does 6 pages per invocation, stores a cursor in `settings.discover_cursor`, and resumes on the next click, the ↻ button, or the next cron tick. `discover` with `{reset:true}` starts a sweep over. The ↻ button is enabled for discover now and loops until the sweep reports it swept all tags. A full sweep of ~700 games is a dozen or so ↻ rounds, or it just finishes over a few daily cron ticks on its own.
+
+
+### 11b. v0.4.2 / v0.4.3 fixes (Sep 10)
+
+- v0.4.2: Discover's cursor code called `setSetting` without importing it. Fixed the import.
+- v0.4.3: the 50-subrequest-per-invocation cap on Cloudflare's free plan was tripping Enrich, which makes 3 Steam fetches per game (details, reviews, tag votes); a batch of 25 meant 75 fetches. Enrich is now capped at 12 games per invocation (36 fetches), independent of `BATCH_LIMIT`. The shipped `BATCH_LIMIT` default dropped from 25 to 12 so match and tag also stay clear. Subrequest budget per invocation now: discover 6, enrich 36, match 24, tag 12, refresh ~1 per 25 matched games (revisit if the matched catalog ever exceeds ~1000).
+
+
+## 12. v0.5: the Runner, and automatic mode (Sep 10)
+
+Kevin's ask: automate the whole thing, no review chores. Two changes.
+
+**The Runner.** A Durable Object (`worker/lib/runner.js`, binding `RUNNER`, SQLite-backed so it is on the free plan). Its alarm fires every 45 seconds, `pickStage` finds the first stage with work in pipeline order (discover cursor mid-sweep, then enrich, then match if the PlatPrices key is set, then tag), it runs one batch, and reschedules itself. When nothing is pending it stops. Each alarm is its own Worker invocation, so each batch gets its own 50-subrequest budget; that is the whole reason it exists. Cron pokes it at every tick, so day to day nothing needs pressing. The Queue page has one "Run everything" button for the first backfill or after a change, and a Stop. A safety cap stops it after 400 batches in one start. If Workers AI's daily allocation is hit during tag, the stage reports it and the Runner leaves tag alone until the next start.
+
+**Review mode.** `settings.review_mode`, default `auto`: model tags stand as written, matches are accepted at 0.7 confidence or better, weaker matches are treated as not on PSN and rechecked weekly. `hybrid` restores the earlier behaviour (queue at the threshold, park matches between 0.5 and 0.9). In either mode any game's facets can be edited from its page and a wrong match fixed with "Attach this listing"; those are corrections, not gates.
+
+Also: errored games retry after an hour instead of a day, and "Retry errored games" on Queue resets them immediately and clears stale error notes.
+
+Deploy note: the Durable Object is created by the deploy itself (the `migrations` block in `wrangler.jsonc`). No D1 change for v0.5.

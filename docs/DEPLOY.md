@@ -36,7 +36,11 @@ Worker → Settings → Variables and Secrets. Two secrets:
 
 The site runs without `PLATPRICES_KEY`; only the match, refresh, and attach steps need it.
 
-## Seeding the catalog
+## Seeding the catalog (v0.5 and later)
+
+Settings: paste the admin token, look up the Bullet Heaven tag id (723991), save. Queue: press **Run everything**. Leave the tab open or not; the Runner works in the background, one batch every 45 seconds, and stops when done. Match and price steps wait for the PlatPrices key and pick up on their own once it is added. That is the whole procedure.
+
+## Seeding the catalog (manual, pre-v0.5)
 
 On the site:
 

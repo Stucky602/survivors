@@ -1,5 +1,7 @@
 // Survivors worker: API routes, cron stages, and the static site (via the assets binding).
 import { STAGES, acceptMatch } from './lib/stages.js';
+import { Runner, pickStage } from './lib/runner.js';
+export { Runner };
 import { getSetting, setSetting, lastRuns, readBudget, now } from './lib/db.js';
 import { isAdmin } from './lib/auth.js';
 import * as steam from './lib/steam.js';
@@ -117,11 +119,21 @@ async function handleApi(request, env, ctx) {
 
   if (path === '/admin/whoami') return json({ admin: true });
 
-  if (m === 'POST' && /^\/admin\/run\/\w+$/.test(path)) {
+  if (m === 'POST' && /^\/admin\/run\/[\w-]+$/.test(path)) {
     const stage = path.split('/')[3];
     const fn = STAGES[stage];
     if (!fn) return bad(`unknown stage ${stage}`);
     return json(await fn(env, body));
+  }
+
+  // The Runner: start drains everything, stop halts it, status reports.
+  if (/^\/admin\/runner\/(start|stop|status)$/.test(path)) {
+    if (!env.RUNNER) return bad('runner binding not configured', 501);
+    const id = env.RUNNER.idFromName('main');
+    const r = await env.RUNNER.get(id).fetch(new Request(`https://runner${path}`));
+    const d = await r.json();
+    if (path.endsWith('status')) d.pending = await pickStage(env);
+    return json(d);
   }
 
   if (m === 'GET' && path === '/admin/queue') {
@@ -197,10 +209,11 @@ async function handleApi(request, env, ctx) {
   }
 
   if (m === 'GET' && path === '/admin/settings') {
-    return json({ taste: { ...DEFAULT_SETTINGS, ...(await getSetting(env.DB, 'taste', {})) }, steam_tags: await getSetting(env.DB, 'steam_tags', []), extra_appids: await getSetting(env.DB, 'extra_appids', []) });
+    return json({ taste: { ...DEFAULT_SETTINGS, ...(await getSetting(env.DB, 'taste', {})) }, steam_tags: await getSetting(env.DB, 'steam_tags', []), extra_appids: await getSetting(env.DB, 'extra_appids', []), review_mode: await getSetting(env.DB, 'review_mode', 'auto') });
   }
   if (m === 'PUT' && path === '/admin/settings') {
     if (body.taste) await setSetting(env.DB, 'taste', body.taste);
+    if (body.review_mode) await setSetting(env.DB, 'review_mode', body.review_mode === 'hybrid' ? 'hybrid' : 'auto');
     if (body.steam_tags) await setSetting(env.DB, 'steam_tags', body.steam_tags);
     if (body.extra_appids) await setSetting(env.DB, 'extra_appids', body.extra_appids.map(Number).filter(Boolean));
     return json({ ok: true });
@@ -231,12 +244,17 @@ export default {
   },
 
   async scheduled(event, env, ctx) {
-    const plan = {
-      '0 9 * * *': ['discover', 'refresh'],
-      '30 9 * * *': ['enrich', 'match', 'tag'],
-      '0 21 * * *': ['enrich', 'match', 'tag']
-    };
-    const stages = plan[event.cron] || ['enrich', 'match', 'tag'];
-    ctx.waitUntil((async () => { for (const s of stages) await STAGES[s](env, {}); })());
+    // One cheap stage per tick (stays under the 50-subrequest cap), then hand the rest to the Runner,
+    // which drains enrich/match/tag one batch per alarm in fresh invocations.
+    ctx.waitUntil((async () => {
+      if (event.cron === '0 9 * * *') { await STAGES.discover(env, {}); await STAGES.refresh(env, {}); }
+      if (env.RUNNER) {
+        const id = env.RUNNER.idFromName('main');
+        await env.RUNNER.get(id).fetch(new Request('https://runner/start'));
+      } else {
+        const s = await pickStage(env);
+        if (s) await STAGES[s](env, {});
+      }
+    })());
   }
 };
