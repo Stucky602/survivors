@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import GameTable from '../components/GameTable.jsx';
 
-export default function Upcoming() {
+export default function Upcoming({ meta }) {
   const [games, setGames] = useState(null);
   const [err, setErr] = useState('');
   useEffect(() => { api('/games?view=upcoming').then((d) => setGames(d.games)).catch((e) => setErr(e.message)); }, []);
@@ -21,7 +21,7 @@ export default function Upcoming() {
       <h2>Not out on Steam yet either</h2>
       <GameTable games={comingSoon} columns={['score', 'category', 'release', 'steam']} empty="No unreleased games in the tracked set." />
       <h2>Out on Steam, no PS Store listing yet</h2>
-      <p className="muted">Sorted by taste score. Unmatched games get rechecked weekly. Best fits here are the ports worth waiting for.</p>
+      <p className="muted">{meta && meta.has_platprices_key === false ? 'These have not been checked against the PS Store yet: the Match step is waiting on the PlatPrices key. Many of them are on PS5; they move to the PS Store page as soon as matching runs. ' : 'Sorted by taste score. Unmatched games get rechecked weekly. Best fits here are the ports worth waiting for.'}</p>
       <GameTable games={onSteam} columns={['score', 'category', 'release', 'steam']} empty="Every tracked game has a PS Store listing." />
     </>
   );

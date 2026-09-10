@@ -14,7 +14,7 @@ const ROUTES = [
   ['home', 'Home'],
   ['upcoming', 'Upcoming'],
   ['sale', 'On sale'],
-  ['browse', 'Browse'],
+  ['browse', 'PS Store'],
   ['queue', 'Queue'],
   ['settings', 'Settings']
 ];

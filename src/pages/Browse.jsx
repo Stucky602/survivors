@@ -41,6 +41,24 @@ export default function Browse({ meta }) {
   if (err) return <p className="bar warn">{err}</p>;
   if (!rescored) return <p className="muted">Loading the run</p>;
 
+  // Nothing matched yet: say why, rather than "no games match these filters".
+  if (rescored.length === 0) {
+    const c = (meta && meta.counts) || {};
+    const noKey = meta && meta.has_platprices_key === false;
+    return (
+      <>
+        <h1>PS Store catalog</h1>
+        <p className="muted">Every tracked game that has a PlayStation Store listing, with its price and score.</p>
+        <div className="bar">
+          <p>No games have been matched to the PS Store yet.</p>
+          {noKey
+            ? <p>The Match step needs the PlatPrices key, which is not on the worker. {c.enriched || 0} Steam games are loaded and waiting under <a href="#/upcoming">Upcoming</a>; the moment the key is added under Variables and Secrets, the Runner matches them and this page fills in.</p>
+            : <p>The key is set, so Match just has not run yet. Press Run everything on <a href="#/queue">Queue</a>, or wait for tonight's cron.</p>}
+        </div>
+      </>
+    );
+  }
+
   const tier = getPsPlus();
   const q = f.q.trim().toLowerCase();
   let shown = rescored.filter((g) => {
@@ -76,7 +94,8 @@ export default function Browse({ meta }) {
 
   return (
     <>
-      <h1>Browse</h1>
+      <h1>PS Store catalog</h1>
+      <p className="muted">Every tracked game that has a PlayStation Store listing, with its price and score. Steam games not yet found on PSN are under Upcoming.</p>
       <div className="presets">
         {PRESETS.map(([label, patch]) => <button key={label} className={isPreset(patch) ? 'on' : ''} onClick={() => setF({ ...BASE, ...patch })}>{label}</button>)}
         <button onClick={() => setF(BASE)}>Reset</button>
@@ -97,7 +116,7 @@ export default function Browse({ meta }) {
         <label className="check"><input type="checkbox" checked={f.hideNo} onChange={set('hideNo')} /> Hide rejected</label>
       </div>
       <p className="muted">
-        {shown.length} of {rescored.length} on the PS Store{getLocalTaste() ? '. Scores use your local weights from Settings' : ''}.
+        {shown.length} of {rescored.length} PS Store games{getLocalTaste() ? '. Scores use your local weights from Settings' : ''}.
         {' '}<a href="#" onClick={(e) => { e.preventDefault(); download('survivors.csv', toCSV(shown), 'text/csv'); }}>CSV</a>, <a href="#" onClick={(e) => { e.preventDefault(); download('survivors.json', JSON.stringify(shown, null, 2), 'application/json'); }}>JSON</a>
         {cmp.length > 1 ? <>, <a href={`#/compare/${cmp.join(',')}`}>Compare {cmp.length}</a></> : null}
       </p>
