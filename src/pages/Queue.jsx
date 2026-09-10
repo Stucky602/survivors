@@ -105,8 +105,8 @@ export default function Queue({ meta, onChange }) {
       <div className="actions wrap">
         {STAGES.map((s) => <span key={s} className="pair"><button onClick={() => run(s)} disabled={!!busy}>{busy === s ? `${LABEL[s]}…` : LABEL[s]}</button><button onClick={() => run(s, true)} disabled={!!busy || s === 'refresh' || s === 'rescore'} title="Run until empty">↻</button></span>)}
         <button onClick={() => run('retry-errors')} disabled={!!busy}>Retry errored games</button>
-        <button onClick={() => { if (confirm('Queue every unconfirmed game for a fresh tag pass with the current model? Old scores stay until replaced.')) run('retag'); }} disabled={!!busy}>Re-score all with current model</button>
-        <button onClick={() => run('rematch')} disabled={!!busy} title="Re-check every game marked not listed against the PS Store, using the smarter name search">Re-match not listed</button>
+        <button onClick={() => { if (confirm('Re-score games tagged by an older model with the current one? Games already on the current model and anything you confirmed by hand are skipped. Old scores stay until replaced.')) run('retag'); }} disabled={!!busy}>Re-score with current model</button>
+        <button onClick={() => run('rematch')} disabled={!!busy} title="Re-check not-listed games whose title has a subtitle or edition word. Matched games are never touched.">Re-match not listed</button>
       </div>
       {log.length > 0 && <pre className="log">{log.join('\n')}</pre>}
 

@@ -334,21 +334,27 @@ export async function plans(env, opts = {}) {
   });
 }
 
-// Queue every unconfirmed game for a fresh tag pass (e.g. after switching the tagging model).
-// Old facets stay visible until the new ones replace them; confirmed facets are never touched.
+// Queue unconfirmed games tagged by a DIFFERENT model for a fresh pass with the current one.
+// Already-current and hand-confirmed facets are never touched. Old facets stay visible until replaced.
+export const currentTagger = (env) => (env.ANTHROPIC_API_KEY ? (env.CLAUDE_MODEL || 'claude-haiku-4-5') : (env.AI_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast'));
 export async function retag(env) {
   return withRun(env.DB, 'retag', async () => {
-    const r = await env.DB.prepare(`UPDATE facets SET reviews_at_tag = -100000, needs_review = 0 WHERE confirmed_by IS NULL`).run();
-    return { count: r.meta.changes, note: 'queued for re-tag; the Runner picks them up' };
+    const cur = currentTagger(env);
+    const r = await env.DB.prepare(`UPDATE facets SET reviews_at_tag = -100000, needs_review = 0 WHERE confirmed_by IS NULL AND (model IS NULL OR model != ?) AND reviews_at_tag >= 0`).bind(cur).run();
+    const same = await env.DB.prepare(`SELECT COUNT(*) AS n FROM facets WHERE model = ?`).bind(cur).first();
+    return { count: r.meta.changes, note: `queued for re-score with ${cur}; ${same.n} already on it, confirmed facets untouched` };
   });
 }
 
-// Re-queue every "not listed" game for another match pass (after the search got smarter, or a port shipped).
-export async function rematch(env) {
+// Re-queue "not listed" games for another match pass. Matched games are never touched; a re-match can only add a listing.
+// By default only titles the smarter search can help with (a subtitle or an edition word); `all: true` does every not-listed game.
+export async function rematch(env, opts = {}) {
   return withRun(env.DB, 'rematch', async () => {
-    const r = await env.DB.prepare(`UPDATE games SET next_match_at = NULL WHERE psn_status = 'not_listed' AND ppid IS NULL`).run();
+    const { results } = await env.DB.prepare(`SELECT appid, name FROM games WHERE psn_status = 'not_listed' AND ppid IS NULL`).all();
+    const targets = results.filter((g) => opts.all || nameVariants(g.name).length > 1);
+    for (const g of targets) await env.DB.prepare(`UPDATE games SET next_match_at = NULL WHERE appid = ? AND ppid IS NULL`).bind(g.appid).run();
     await setSetting(env.DB, 'rematch_done_v1', true);
-    return { count: r.meta.changes, note: 'queued for re-match; the Runner picks them up' };
+    return { count: targets.length, note: `${targets.length} of ${results.length} not-listed games queued (${opts.all ? 'all' : 'those with a subtitle or edition word'}); matched games untouched` };
   });
 }
 
