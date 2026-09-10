@@ -15,9 +15,12 @@ export class Runner {
     const url = new URL(request.url);
     const cmd = url.pathname.split('/').pop();
     if (cmd === 'start') {
+      const pc = await pendingCounts(this.env);
       await this.state.storage.put('ticks', 0);
       await this.state.storage.put('stopped', false);
       await this.state.storage.put('startedAt', now());
+      await this.state.storage.put('startTotal', pc.total);
+      await this.state.storage.put('history', []);
       const existing = await this.state.storage.getAlarm();
       if (!existing) await this.state.storage.setAlarm(Date.now() + 1000);
       return json({ ok: true, running: true });
@@ -32,12 +35,29 @@ export class Runner {
 
   async status() {
     const alarm = await this.state.storage.getAlarm();
+    const pending = await pendingCounts(this.env);
+    const startTotal = (await this.state.storage.get('startTotal')) || 0;
+    const history = (await this.state.storage.get('history')) || [];
+    // Rate from the last 8 batches: items per second, wall clock.
+    let perSec = null;
+    if (history.length >= 2) {
+      const first = history[0], lastH = history[history.length - 1];
+      const secs = (Date.parse(lastH.at) - Date.parse(first.at)) / 1000;
+      const items = history.slice(1).reduce((a, h) => a + (h.count || 0), 0);
+      if (secs > 0 && items > 0) perSec = items / secs;
+    }
+    const done = Math.max(0, startTotal - pending.total);
     return {
       running: !!alarm,
       ticks: (await this.state.storage.get('ticks')) || 0,
       last: (await this.state.storage.get('last')) || null,
       startedAt: (await this.state.storage.get('startedAt')) || null,
-      nextAt: alarm ? new Date(alarm).toISOString() : null
+      nextAt: alarm ? new Date(alarm).toISOString() : null,
+      pending_counts: pending,
+      start_total: startTotal,
+      done,
+      progress: startTotal > 0 ? Math.min(1, done / startTotal) : (pending.total === 0 ? 1 : 0),
+      eta_seconds: perSec ? Math.round(pending.total / perSec) : null
     };
   }
 
@@ -54,6 +74,8 @@ export class Runner {
       result = { ok: false, error: e.message || String(e) };
     }
     await this.state.storage.put('last', { at: now(), stage: stage || IDLE_NOTE, count: result?.count ?? 0, ok: result?.ok ?? true, note: result?.note || result?.error || null });
+    const history = ((await this.state.storage.get('history')) || []).concat([{ at: now(), stage, count: result?.count ?? 0 }]).slice(-8);
+    await this.state.storage.put('history', history);
     const more = stage && ticks < MAX_TICKS;
     if (more) await this.state.storage.setAlarm(Date.now() + tickMs(env));
     else if (await aiCapped(env)) {
@@ -63,6 +85,20 @@ export class Runner {
       await this.state.storage.setAlarm(d.getTime());
     }
   }
+}
+
+// How much work each stage has left. Discover is counted in pages (cursor), the rest in games.
+export async function pendingCounts(env) {
+  const db = env.DB;
+  const cursor = await getSetting(db, 'discover_cursor', { tag: 0, page: 0 });
+  const tags = await getSetting(db, 'steam_tags', []);
+  const discover = cursor.tag > 0 || cursor.page > 0 ? Math.max(1, (tags.length - cursor.tag) * 14 - cursor.page) : 0; // ~14 pages per tag, rough
+  const enrich = (await db.prepare(`SELECT COUNT(*) AS n FROM games g LEFT JOIN steam_cache c ON c.appid = g.appid WHERE g.status = 'new' OR (g.status = 'error' AND COALESCE(g.error_count,0) < 5 AND (g.last_enriched IS NULL OR g.last_enriched < ?)) OR (g.status = 'enriched' AND c.news_json IS NULL)`).bind(daysFromNow(-1 / 24)).first()).n;
+  const match = env.PLATPRICES_KEY ? (await db.prepare(`SELECT COUNT(*) AS n FROM games WHERE status = 'enriched' AND psn_status IN ('unmatched','not_listed') AND ppid IS NULL AND (next_match_at IS NULL OR next_match_at <= ?)`).bind(now()).first()).n : 0;
+  const tag = (await db.prepare(`SELECT COUNT(*) AS n FROM games g LEFT JOIN facets f ON f.appid = g.appid JOIN steam_cache c ON c.appid = g.appid WHERE g.status = 'enriched' AND c.appdetails_json IS NOT NULL AND (f.appid IS NULL OR (f.confirmed_by IS NULL AND COALESCE(g.steam_pos,0)+COALESCE(g.steam_neg,0) >= 2 * COALESCE(f.reviews_at_tag, 0) + 20))`).first()).n;
+  const plans = (await db.prepare(`SELECT COUNT(*) AS n FROM games g JOIN steam_cache c ON c.appid = g.appid WHERE g.status = 'enriched' AND g.ppid IS NULL AND c.news_json IS NOT NULL AND g.ps5_plan_at IS NULL AND (g.last_error IS NULL OR g.last_error NOT LIKE 'plans: %')`).first()).n;
+  const capped = await aiCapped(env);
+  return { discover, enrich, match, tag: capped ? 0 : tag, plans: capped ? 0 : plans, tag_blocked: capped ? tag : 0, plans_blocked: capped ? plans : 0, total: discover + enrich + match + (capped ? 0 : tag + plans) };
 }
 
 // Which stage has work, in pipeline order. Returns null when everything is drained.

@@ -201,3 +201,10 @@ table.games td:nth-child(3) a { font-weight: 600; }
   .top nav { gap: 12px; width: 100%; overflow-x: auto; white-space: nowrap; flex-wrap: nowrap; scrollbar-width: none; }
   .top nav::-webkit-scrollbar { display: none; }
 }
+
+/* runner progress */
+.progress { margin: 10px 0 4px; max-width: 720px; }
+.progress-track { height: 12px; background: var(--wall); border: 1px solid #3a3452; }
+.progress-fill { height: 100%; background: var(--gem); box-shadow: 0 0 8px rgba(79,195,255,0.5); transition: width .6s steps(12); }
+.progress-text { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 13px; margin-top: 6px; font-family: var(--display); font-size: 10px; }
+.progress-text .muted { font-family: var(--body); font-size: 13px; }

@@ -18,9 +18,11 @@ export default function Queue({ meta, onChange }) {
   useEffect(() => {
     if (!getToken()) return;
     runnerStatus();
-    const t = setInterval(() => { runnerStatus(); if (runner && runner.running) { load(); onChange && onChange(); } }, 20000);
-    return () => clearInterval(t);
+    const t = setInterval(() => { runnerStatus(); }, 6000);
+    const t2 = setInterval(() => { load(); onChange && onChange(); }, 30000);
+    return () => { clearInterval(t); clearInterval(t2); };
   }, []);
+  const fmtEta = (sec) => sec == null ? '' : sec < 90 ? 'about a minute' : sec < 3600 ? `about ${Math.round(sec / 60)} minutes` : `about ${(sec / 3600).toFixed(1)} hours`;
   const runnerCmd = async (cmd) => { setBusy('runner'); try { await api(`/admin/runner/${cmd}`, { method: 'POST', admin: true, body: {} }); await runnerStatus(); } catch (e) { setErr(e.message); } setBusy(''); };
 
   const load = () => api('/admin/queue', { admin: true }).then(setQ).catch((e) => setErr(e.message));
@@ -68,11 +70,23 @@ export default function Queue({ meta, onChange }) {
               ? <button onClick={() => runnerCmd('stop')} disabled={!!busy}>Stop</button>
               : <button className="primary" onClick={() => runnerCmd('start')} disabled={!!busy}>Run everything</button>}
             {runner && <span className="muted">
-              {runner.running ? `Running, batch ${runner.ticks}, next in under a minute.` : 'Idle.'}
+              {runner.running ? `Running, batch ${runner.ticks}.` : 'Idle.'}
               {runner.ai_capped_until ? ` Today's free AI allocation is used up; tagging and plans resume after ${runner.ai_capped_until.slice(11, 16)} UTC${runner.running ? ' (the Runner wakes itself then)' : ''}.` : runner.pending ? ` Next up: ${runner.pending}.` : runner.running ? '' : ' Nothing pending.'}
               {runner.last && runner.last.stage !== 'idle' ? ` Last: ${runner.last.stage} ${runner.last.ok ? 'ok' : 'failed'} ${runner.last.count}${runner.last.note ? `, ${runner.last.note}` : ''}.` : ''}
             </span>}
           </div>
+          {runner && runner.pending_counts && (runner.running || runner.pending_counts.total > 0) && (
+            <div className="progress">
+              <div className="progress-track"><div className="progress-fill" style={{ width: `${Math.round((runner.progress || 0) * 100)}%` }} /></div>
+              <div className="progress-text">
+                <span>{Math.round((runner.progress || 0) * 100)}%{runner.start_total ? `, ${runner.done} of ${runner.start_total} items` : ''}{runner.eta_seconds != null && runner.running ? `, ${fmtEta(runner.eta_seconds)} left` : ''}</span>
+                <span className="muted">
+                  {[['discover', 'pages'], ['enrich', 'to enrich'], ['match', 'to match'], ['tag', 'to score'], ['plans', 'plans to read']].filter(([k]) => runner.pending_counts[k] > 0).map(([k, label]) => `${runner.pending_counts[k]} ${label}`).join(', ') || 'nothing left'}
+                  {runner.pending_counts.tag_blocked || runner.pending_counts.plans_blocked ? ` (${runner.pending_counts.tag_blocked + runner.pending_counts.plans_blocked} waiting on the AI allocation)` : ''}
+                </span>
+              </div>
+            </div>
+          )}
         </>
       )}
 
