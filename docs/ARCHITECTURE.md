@@ -1,6 +1,6 @@
 # Survivors-like PSN tracker: architecture v0.1
 
-Status: v0.9 built Sep 10 2026. Sections 1 to 6 describe what is in the repo; sections 9 to 11 list what v0.2 to v0.4 added.
+Status: v0.9.2 built Sep 10 2026. Sections 1 to 6 describe what is in the repo; sections 9 to 11 list what v0.2 to v0.4 added.
 Decisions already made in chat: public site, one real user, $0/month, hybrid tagging (AI first pass, Kevin confirms high scorers), hub is both a filter and a weight.
 
 ## 1. What the site does
@@ -323,3 +323,12 @@ Both optional, both behind a single dashboard setting, nothing changes if neithe
 Kevin's read: 0 announcements found across 500 games cannot be right. Agreed. Two failure paths in the news-feed method: Steam refusing the news calls (enrich stored an empty feed, the reader correctly said "nothing"), and the 8B model answering with keys the normaliser did not accept (`status` vs `ps5_status`, capitals), which filed as unknown. `parsePlan()` now accepts the variants, and Queue has a diagnostics panel: plan stats (how many feeds are empty, counts by status and method) and "Read one game live", which runs the reader on one appid and shows the cached news, the console mentions, the raw model text, and what parsed.
 
 The real fix is a second method. With `PLANS_WEB_SEARCH=1` and the Anthropic key, the plans step calls Claude with the Messages API web-search tool (up to 4 searches per game) and asks it to check the developer's site and socials, Steam news, the PlayStation Blog, and press, then answer with a status, the sentence, and the source URL (`ps5_plan_url`, `ps5_plan_method`, migration 0007). A new `listed` status means the web found a PS Store listing the matcher missed; that game is pushed back into the match queue. Cost is a few cents per game, roughly $10 to $15 for the catalog once. Web reads run 25 per batch. "Re-read plans" queues everything not yet read with the current method; dated announcements are never re-read.
+
+
+### 16a. v0.9.2: the money guard (Sep 10)
+
+The web-search read cost $0.05 to $0.08 a game, not the "few cents" claimed in 16, because each search's results land in the prompt. Re-read plans queued 598 of them and spent Kevin's $20 credit in an afternoon. Three changes:
+
+- **Meter and cap.** `ai.js` records every Claude call's input, output, cached tokens, and search count from the API's `usage` block, prices them (Haiku $1/$5 per M, Sonnet $2/$10, $0.01 per search; overridable with `CLAUDE_PRICE_IN`/`CLAUDE_PRICE_OUT`), and keeps a running monthly total in `settings.claude_spend_YYYY-MM`. `CLAUDE_BUDGET_USD` (default 5) is a hard stop: every Claude call refuses once it is reached, the stage reports it, and the Runner skips web reads. Queue shows the total, the cap, calls, and searches.
+- **Web reads are gated.** `plans()` now runs two passes: the free news read for everything unread, then, only when `PLANS_WEB_SEARCH=1`, a web read for games the news read left at unknown/planned that score at least `PLANS_WEB_MIN_SCORE` (60) with at least `PLANS_WEB_MIN_REVIEWS` (50) Steam reviews. Two searches per game, 700 output tokens, 15 per batch. That is roughly a tenth of the catalog.
+- **Re-read plans no longer spends.** It only re-queues the free news read; the web candidates are selected inside `plans()` by the thresholds above. Its note says how many would qualify at current thresholds.

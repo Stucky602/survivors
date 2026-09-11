@@ -1,6 +1,7 @@
 // Survivors worker: API routes, cron stages, and the static site (via the assets binding).
 import { STAGES, acceptMatch, aiCapped, planDebug, planMethod } from './lib/stages.js';
 import { Runner, pickStage } from './lib/runner.js';
+import { claudeSpend } from './lib/ai.js';
 export { Runner };
 import { getSetting, setSetting, lastRuns, readBudget, now } from './lib/db.js';
 import { isAdmin } from './lib/auth.js';
@@ -143,7 +144,7 @@ async function handleApi(request, env, ctx) {
     const scope = ['all', 'available', 'upcoming'].includes(body.scope) ? body.scope : 'all';
     const r = await env.RUNNER.get(id).fetch(new Request(`https://runner${path}?scope=${scope}`));
     const d = await r.json();
-    if (path.endsWith('status')) { d.pending = await pickStage(env); d.ai_capped_until = (await aiCapped(env)) ? await getSetting(env.DB, 'ai_capped_until', null) : null; }
+    if (path.endsWith('status')) { d.pending = await pickStage(env); d.claude = env.ANTHROPIC_API_KEY ? await claudeSpend(env) : null; d.ai_capped_until = (await aiCapped(env)) ? await getSetting(env.DB, 'ai_capped_until', null) : null; }
     return json(d);
   }
 

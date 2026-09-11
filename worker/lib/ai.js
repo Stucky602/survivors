@@ -12,8 +12,34 @@ export const CAP_RE = /quota|limit|429|exceed|neurons|allocation|4006/i;
 export const isCapError = (e) => CAP_RE.test(String(e && e.message || e));
 
 // Claude via the Messages API. Used for the tag step when ANTHROPIC_API_KEY is set; one subrequest per call.
-export async function runClaude(env, { system, user, maxTokens, webSearch = false, maxSearches = 4 }) {
+// Per-million-token prices and per-search price. Haiku 4.5 and Sonnet 5 as of Sep 2026; override with CLAUDE_PRICE_IN / CLAUDE_PRICE_OUT if they change.
+function prices(env, model) {
+  const sonnet = /sonnet/i.test(model);
+  return { inM: Number(env.CLAUDE_PRICE_IN) || (sonnet ? 2 : 1), outM: Number(env.CLAUDE_PRICE_OUT) || (sonnet ? 10 : 5), search: 0.01 };
+}
+const monthKey = () => new Date().toISOString().slice(0, 7);
+
+export async function claudeSpend(env) {
+  const row = await env.DB.prepare('SELECT value_json FROM settings WHERE key = ?').bind(`claude_spend_${monthKey()}`).first();
+  const sp = row ? JSON.parse(row.value_json) : { usd: 0, calls: 0, searches: 0, input: 0, output: 0 };
+  const cap = Number(env.CLAUDE_BUDGET_USD);
+  return { ...sp, cap: Number.isFinite(cap) ? cap : 5, month: monthKey() };
+}
+export async function claudeOverBudget(env) { const s = await claudeSpend(env); return s.usd >= s.cap; }
+async function recordSpend(env, model, usage, searches) {
+  const pr = prices(env, model);
+  const inTok = (usage && usage.input_tokens) || 0, outTok = (usage && usage.output_tokens) || 0;
+  const cacheIn = (usage && ((usage.cache_read_input_tokens || 0) + (usage.cache_creation_input_tokens || 0))) || 0;
+  const usd = ((inTok + cacheIn) / 1e6) * pr.inM + (outTok / 1e6) * pr.outM + searches * pr.search;
+  const cur = await claudeSpend(env);
+  const next = { usd: +(cur.usd + usd).toFixed(4), calls: cur.calls + 1, searches: cur.searches + searches, input: cur.input + inTok + cacheIn, output: cur.output + outTok };
+  await env.DB.prepare('INSERT INTO settings (key, value_json) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json').bind(`claude_spend_${monthKey()}`, JSON.stringify(next)).run();
+  return usd;
+}
+
+export async function runClaude(env, { system, user, maxTokens, webSearch = false, maxSearches = 2 }) {
   const model = env.CLAUDE_MODEL || 'claude-haiku-4-5';
+  if (await claudeOverBudget(env)) throw new Error('claude 402: monthly budget cap reached (CLAUDE_BUDGET_USD); raise it on the worker to continue');
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort('timeout'), webSearch ? 120000 : 60000);
   try {
@@ -30,8 +56,9 @@ export async function runClaude(env, { system, user, maxTokens, webSearch = fals
     const text = texts.join('\n');
     // The JSON is in the final text block; earlier blocks are the model narrating its searches.
     const json = extractJSON(texts[texts.length - 1] || '') || extractJSON(text);
-    const searches = (j.content || []).filter((c) => c.type === 'server_tool_use').length;
-    return { model: webSearch ? `${model}+web` : model, text, json, searches, usage: j.usage || null };
+    const searches = (j.usage && j.usage.server_tool_use && j.usage.server_tool_use.web_search_requests) || (j.content || []).filter((c) => c.type === 'server_tool_use').length;
+    const usd = await recordSpend(env, model, j.usage, searches);
+    return { model: webSearch ? `${model}+web` : model, text, json, searches, usage: j.usage || null, usd };
   } finally { clearTimeout(timer); }
 }
 
