@@ -84,6 +84,7 @@ export default function Queue({ meta, onChange }) {
             {runner && runner.running
               ? <button onClick={() => runnerCmd('stop')} disabled={!!busy}>Stop</button>
               : <button className="primary" onClick={() => runnerCmd('start')} disabled={!!busy}>{scope === 'all' ? 'Run everything' : `Run ${SCOPES.find(([k]) => k === scope)[1].toLowerCase()}`}</button>}
+            {runner && runner.claude && <span className={runner.claude.usd >= runner.claude.cap ? 'warn-text' : 'muted'}>Claude spend this month: <b>${runner.claude.usd.toFixed(2)}</b> of a ${runner.claude.cap} cap ({runner.claude.calls} calls, {runner.claude.searches} searches){runner.claude.usd >= runner.claude.cap ? '. Cap reached; Claude calls are stopped until CLAUDE_BUDGET_USD is raised.' : '.'} </span>}
             {runner && <span className="muted">
               {runner.running ? `Running ${SCOPES.find(([k]) => k === runner.scope)?.[1]?.toLowerCase() || runner.scope}, batch ${runner.ticks}.` : 'Idle.'}
               {runner.ai_capped_until ? ` Today's free AI allocation is used up; tagging and plans resume after ${runner.ai_capped_until.slice(11, 16)} UTC${runner.running ? ' (the Runner wakes itself then)' : ''}.` : runner.pending ? ` Next up: ${runner.pending}.` : runner.running ? '' : ' Nothing pending.'}
@@ -124,7 +125,7 @@ export default function Queue({ meta, onChange }) {
       )}
 
       <h2>PS Store plans, under the hood</h2>
-      <p className="muted">Method now: <b>{meta && meta.plan_method === 'web' ? 'Claude with web search' : 'Steam news feed, small model'}</b>.{meta && meta.plan_method !== 'web' ? ' To switch on web search, set the PLANS_WEB_SEARCH variable to 1 on the worker (needs the Anthropic key), then press Re-read plans.' : ''}</p>
+      <p className="muted">Every game gets the free Steam-news read first. {meta && meta.plan_method === 'web' ? <><b>Web search is on</b> for games that the news read could not answer, scoring 70 or better with 50+ reviews, two searches each, inside the monthly Claude cap. A game that has had a web read is never web-read again, whatever its score.</> : <>Web search is off. Set PLANS_WEB_SEARCH to 1 to add a paid Claude web read for high-scoring games the news read could not answer; it stays inside the CLAUDE_BUDGET_USD cap.</>}</p>
       <div className="actions">
         <button onClick={loadPlanStats} disabled={!!busy}>Show plan stats</button>
         <input type="number" placeholder="appid" value={dbgId} onChange={(e) => setDbgId(e.target.value)} />

@@ -124,7 +124,9 @@ export async function enrich(env, opts = {}) {
            ON CONFLICT(appid) DO UPDATE SET appdetails_json = excluded.appdetails_json, appreviews_json = excluded.appreviews_json, tag_votes_json = excluded.tag_votes_json, news_json = COALESCE(excluded.news_json, steam_cache.news_json), fetched_at = excluded.fetched_at`
         ).bind(appid, JSON.stringify(slim), reviews ? JSON.stringify(reviews) : null, tv ? JSON.stringify(tv) : null, news ? JSON.stringify(news) : JSON.stringify([]), now()).run();
         // News changed since the last plan read: let the plans stage look again.
-        await env.DB.prepare(`UPDATE games SET ps5_plan_at = NULL WHERE appid = ? AND ps5_plan IS NOT NULL AND ps5_plan NOT IN ('announced_date') AND ps5_plan_at < ?`).bind(appid, daysFromNow(-30)).run();
+        // Free news reads refresh after 30 days; paid web reads hold for 90. Dated announcements are never re-read.
+        await env.DB.prepare(`UPDATE games SET ps5_plan_at = NULL WHERE appid = ? AND ps5_plan IS NOT NULL AND ps5_plan NOT IN ('announced_date')
+          AND ((ps5_plan_method = 'web' AND ps5_plan_at < ?) OR (COALESCE(ps5_plan_method,'news') != 'web' AND ps5_plan_at < ?))`).bind(appid, daysFromNow(-90), daysFromNow(-30)).run();
         n++;
         await steam.pause(isPaid(env) ? 120 : 300);
       } catch (e) {
@@ -301,6 +303,11 @@ export async function tag(env, opts = {}) {
 // (PLANS_WEB_SEARCH=1 and ANTHROPIC_API_KEY set), which is what actually finds announcements that never hit Steam news.
 export const PLAN_STATUSES = ['announced_date', 'announced_window', 'announced', 'planned', 'not_planned', 'unknown', 'listed'];
 export const planMethod = (env) => (env.ANTHROPIC_API_KEY && String(env.PLANS_WEB_SEARCH || '') === '1' ? 'web' : 'news');
+// Web search costs real money per game, so it is reserved for games worth a port: scored at least PLANS_WEB_MIN_SCORE (60)
+// with at least PLANS_WEB_MIN_REVIEWS (50) Steam reviews. Everything else uses the free news method.
+const webMinScore = (env) => Number(env.PLANS_WEB_MIN_SCORE) || 70;
+const webMinReviews = (env) => Number(env.PLANS_WEB_MIN_REVIEWS) || 50;
+const webWorthSql = (env) => ` AND COALESCE(f.score, -1) >= ${webMinScore(env)} AND COALESCE(g.steam_pos,0)+COALESCE(g.steam_neg,0) >= ${webMinReviews(env)}`;
 
 // Normalise whatever the model returned. Accepts status/ps5_status, any case, stray spaces.
 export function parsePlan(j) {
@@ -315,10 +322,10 @@ export function parsePlan(j) {
   return { status, date: status === 'announced_date' || status === 'listed' ? date : null, window: status === 'announced_window' ? window : null, note: status === 'unknown' ? null : note, platform, url, confidence: Number.isFinite(conf) ? conf : null };
 }
 
-async function readPlanFor(env, g) {
-  const method = planMethod(env);
+async function readPlanFor(env, g, forceMethod = null) {
+  const method = forceMethod || planMethod(env);
   if (method === 'web') {
-    const ai = await runClaude(env, { system: PLAN_WEB_SYSTEM, user: planWebUser(g), maxTokens: 1200, webSearch: true, maxSearches: 4 });
+    const ai = await runClaude(env, { system: PLAN_WEB_SYSTEM, user: planWebUser(g), maxTokens: 700, webSearch: true, maxSearches: 2 });
     return { ai, method };
   }
   const d = JSON.parse(g.appdetails_json || '{}');
@@ -329,46 +336,67 @@ async function readPlanFor(env, g) {
 
 export async function plans(env, opts = {}) {
   return withRun(env.DB, 'plans', async () => {
-    const method = planMethod(env);
-    if (method === 'news' && (await aiCapped(env))) return { count: 0, note: 'daily AI allocation used, waiting for 00:00 UTC' };
-    const limit = Math.min(method === 'web' ? 25 : 400, limitOf(env, opts.limit));
-    const { results } = await env.DB.prepare(
-      `SELECT g.appid, g.name, g.developer, g.publisher, g.steam_release, c.appdetails_json, c.news_json FROM games g JOIN steam_cache c ON c.appid = g.appid
-       WHERE g.status = 'enriched' AND g.ppid IS NULL AND c.news_json IS NOT NULL AND g.ps5_plan_at IS NULL${scopeSql(scopeOf(opts))}
-       ORDER BY COALESCE(g.steam_pos,0) DESC LIMIT ?`
-    ).bind(limit).all();
-    let n = 0, found = 0;
+    // Pass 1 (free): anything unread gets the news method. Pass 2 (paid, gated): games worth a port that the news method
+    // could not answer get one web read, if PLANS_WEB_SEARCH=1 and the monthly Claude cap has room.
+    if (await aiCapped(env)) return { count: 0, note: 'daily AI allocation used, waiting for 00:00 UTC' };
+    const limit = limitOf(env, opts.limit);
+    const sc = scopeSql(scopeOf(opts));
+    let n = 0, found = 0, web = 0, usd = 0;
     const over = budgetClock(env);
-    for (const g of results) {
+    const unread = (await env.DB.prepare(
+      `SELECT g.appid, g.name, g.developer, g.publisher, g.steam_release, c.appdetails_json, c.news_json FROM games g JOIN steam_cache c ON c.appid = g.appid
+       WHERE g.status = 'enriched' AND g.ppid IS NULL AND c.news_json IS NOT NULL AND g.ps5_plan_at IS NULL${sc}
+       ORDER BY COALESCE(g.steam_pos,0) DESC LIMIT ?`).bind(limit).all()).results;
+    for (const g of unread) {
       if (over()) break;
       try {
-        const { ai } = await readPlanFor(env, g);
+        const { ai } = await readPlanFor(env, g, 'news');
         const pl = parsePlan(ai.json || {});
         if (pl.status !== 'unknown') found++;
-        await env.DB.prepare(`UPDATE games SET ps5_plan = ?, ps5_plan_date = ?, ps5_plan_window = ?, ps5_plan_note = ?, ps5_plan_platform = ?, ps5_plan_url = ?, ps5_plan_method = ?, ps5_plan_at = ? WHERE appid = ?`)
-          .bind(pl.status, pl.date, pl.window, pl.note, pl.platform, pl.url, method, now(), g.appid).run();
-        // A web search that says "already listed" is a match the search step missed: put it back in the match queue.
-        if (pl.status === 'listed') await env.DB.prepare(`UPDATE games SET psn_status = 'not_listed', next_match_at = NULL WHERE appid = ? AND ppid IS NULL`).bind(g.appid).run();
+        await env.DB.prepare(`UPDATE games SET ps5_plan = ?, ps5_plan_date = ?, ps5_plan_window = ?, ps5_plan_note = ?, ps5_plan_platform = ?, ps5_plan_url = NULL, ps5_plan_method = 'news', ps5_plan_at = ? WHERE appid = ?`)
+          .bind(pl.status, pl.date, pl.window, pl.note, pl.platform, now(), g.appid).run();
         n++;
       } catch (e) {
-        const msg = String(e.message || e);
-        if (method === 'news' && isCapError(e)) { await markAiCapped(env); return { count: n, note: 'daily AI allocation reached, resumes after 00:00 UTC' }; }
-        if (/^claude (401|402|403|429)/.test(msg)) return { count: n, note: `stopped: ${msg.slice(0, 120)}` };
-        await env.DB.prepare(`UPDATE games SET last_error = ?, ps5_plan = 'unknown', ps5_plan_method = ?, ps5_plan_at = ? WHERE appid = ?`).bind(`plans: ${msg.slice(0, 280)}`, method, now(), g.appid).run();
+        if (isCapError(e)) { await markAiCapped(env); return { count: n, note: 'daily AI allocation reached, resumes after 00:00 UTC' }; }
+        await env.DB.prepare(`UPDATE games SET last_error = ?, ps5_plan = 'unknown', ps5_plan_method = 'news', ps5_plan_at = ? WHERE appid = ?`).bind(`plans: ${String(e.message || e).slice(0, 280)}`, now(), g.appid).run();
       }
     }
-    return { count: n, note: `${found} with something announced, method ${method}` };
+    if (planMethod(env) === 'web' && !over()) {
+      const webLimit = Math.min(15, limit);
+      const worth = (await env.DB.prepare(
+        `SELECT g.appid, g.name, g.developer, g.publisher, g.steam_release FROM games g LEFT JOIN facets f ON f.appid = g.appid
+         WHERE g.status = 'enriched' AND g.ppid IS NULL AND g.ps5_plan_method = 'news' AND g.ps5_plan IN ('unknown','planned')${webWorthSql(env)}${sc}
+         ORDER BY f.score DESC LIMIT ?`).bind(webLimit).all()).results;
+      for (const g of worth) {
+        if (over()) break;
+        try {
+          const { ai } = await readPlanFor(env, g, 'web');
+          const pl = parsePlan(ai.json || {});
+          usd += ai.usd || 0; web++;
+          if (pl.status !== 'unknown') found++;
+          await env.DB.prepare(`UPDATE games SET ps5_plan = ?, ps5_plan_date = ?, ps5_plan_window = ?, ps5_plan_note = ?, ps5_plan_platform = ?, ps5_plan_url = ?, ps5_plan_method = 'web', ps5_plan_at = ? WHERE appid = ?`)
+            .bind(pl.status, pl.date, pl.window, pl.note, pl.platform, pl.url, now(), g.appid).run();
+          if (pl.status === 'listed') await env.DB.prepare(`UPDATE games SET psn_status = 'not_listed', next_match_at = NULL WHERE appid = ? AND ppid IS NULL`).bind(g.appid).run();
+          n++;
+        } catch (e) {
+          const msg = String(e.message || e);
+          if (/^claude (401|402|403|429)/.test(msg)) return { count: n, note: `stopped: ${msg.slice(0, 140)}` };
+          await env.DB.prepare(`UPDATE games SET last_error = ?, ps5_plan_method = 'web', ps5_plan_at = ? WHERE appid = ?`).bind(`plans: ${msg.slice(0, 280)}`, now(), g.appid).run();
+        }
+      }
+    }
+    return { count: n, note: `${found} with something announced; ${web} web reads ($${usd.toFixed(2)})` };
   });
 }
 
 // Re-queue plans reads: everything not yet read with the current method, or (all: true) every non-dated one.
 export async function replan(env, opts = {}) {
   return withRun(env.DB, 'replan', async () => {
-    const method = planMethod(env);
-    const r = opts.all
-      ? await env.DB.prepare(`UPDATE games SET ps5_plan_at = NULL WHERE ppid IS NULL AND ps5_plan_at IS NOT NULL AND ps5_plan != 'announced_date'`).run()
-      : await env.DB.prepare(`UPDATE games SET ps5_plan_at = NULL WHERE ppid IS NULL AND ps5_plan_at IS NOT NULL AND ps5_plan != 'announced_date' AND (ps5_plan_method IS NULL OR ps5_plan_method != ?)`).bind(method).run();
-    return { count: r.meta.changes, note: `queued for a ${method} read; dated announcements kept` };
+    // Re-queues the FREE news read for games never read by it. Web reads are chosen automatically inside plans()
+    // (score >= 60, 50+ reviews, news said unknown), so nothing here spends money.
+    const r = await env.DB.prepare(`UPDATE games SET ps5_plan_at = NULL WHERE ppid IS NULL AND ps5_plan_at IS NOT NULL AND ps5_plan != 'announced_date' AND ps5_plan_method IS NULL`).run();
+    const worth = await env.DB.prepare(`SELECT COUNT(*) AS n FROM games g LEFT JOIN facets f ON f.appid = g.appid WHERE g.status = 'enriched' AND g.ppid IS NULL AND (g.ps5_plan_method IS NULL OR g.ps5_plan_method = 'news') AND COALESCE(g.ps5_plan,'unknown') IN ('unknown','planned')${webWorthSql(env)}`).first();
+    return { count: r.meta.changes, note: `${r.meta.changes} queued for the free news read; ${worth.n} would qualify for a web read at current thresholds` };
   });
 }
 

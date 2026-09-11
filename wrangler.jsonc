@@ -30,6 +30,9 @@
     "BATCH_LIMIT_PAID": "100",
     "CLAUDE_MODEL": "claude-haiku-4-5",
     "PLANS_WEB_SEARCH": "0",
+    "PLANS_WEB_MIN_SCORE": "70",
+    "PLANS_WEB_MIN_REVIEWS": "50",
+    "CLAUDE_BUDGET_USD": "5",
     "AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     "AI_MODEL_SMALL": "@cf/meta/llama-3.1-8b-instruct-fast",
     "BATCH_LIMIT": "12"
