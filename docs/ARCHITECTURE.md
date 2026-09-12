@@ -1,6 +1,6 @@
 # Survivors-like PSN tracker: architecture v0.1
 
-Status: v0.9.2 built Sep 10 2026. Sections 1 to 6 describe what is in the repo; sections 9 to 11 list what v0.2 to v0.4 added.
+Status: v0.10 built Sep 11 2026. Sections 1 to 6 describe what is in the repo; sections 9 to 11 list what v0.2 to v0.4 added.
 Decisions already made in chat: public site, one real user, $0/month, hybrid tagging (AI first pass, Kevin confirms high scorers), hub is both a filter and a weight.
 
 ## 1. What the site does
@@ -332,3 +332,8 @@ The web-search read cost $0.05 to $0.08 a game, not the "few cents" claimed in 1
 - **Meter and cap.** `ai.js` records every Claude call's input, output, cached tokens, and search count from the API's `usage` block, prices them (Haiku $1/$5 per M, Sonnet $2/$10, $0.01 per search; overridable with `CLAUDE_PRICE_IN`/`CLAUDE_PRICE_OUT`), and keeps a running monthly total in `settings.claude_spend_YYYY-MM`. `CLAUDE_BUDGET_USD` (default 5) is a hard stop: every Claude call refuses once it is reached, the stage reports it, and the Runner skips web reads. Queue shows the total, the cap, calls, and searches.
 - **Web reads are gated.** `plans()` now runs two passes: the free news read for everything unread, then, only when `PLANS_WEB_SEARCH=1`, a web read for games the news read left at unknown/planned that score at least `PLANS_WEB_MIN_SCORE` (60) with at least `PLANS_WEB_MIN_REVIEWS` (50) Steam reviews. Two searches per game, 700 output tokens, 15 per batch. That is roughly a tenth of the catalog.
 - **Re-read plans no longer spends.** It only re-queues the free news read; the web candidates are selected inside `plans()` by the thresholds above. Its note says how many would qualify at current thresholds.
+
+
+## 17. v0.10: hardening (Sep 11)
+
+PlatPrices' reviewer looked at the site before issuing a key and saw internals exposed: the public `/api/meta` returned run logs with error text, the PlatPrices quota counters, the AI model in use, and whether the key was set. Nothing secret, but the wrong picture. Changes: `/api/meta` is now catalog-only; everything operational moved to `/api/admin/meta`. Game detail returns error text and proposed facets only to an authenticated admin. Queue and Settings are unlinked and inert for anonymous visitors, and the client only shows admin state after the Worker has accepted the token. A configured `ADMIN_TOKEN` under 24 characters is refused. Security headers on every response and a CSP on the assets (`public/_headers`), `robots.txt` disallows `/api/`. The full model is in `docs/SECURITY.md`, which is also the answer sent to PlatPrices.

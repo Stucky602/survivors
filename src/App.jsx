@@ -37,7 +37,15 @@ export default function App() {
   const hash = useHash();
   const [meta, setMeta] = useState(null);
   const [metaErr, setMetaErr] = useState('');
-  const reloadMeta = () => api('/meta').then(setMeta).catch((e) => setMetaErr(e.message));
+  // Public meta for everyone; operational meta only when a token is present and accepted.
+  const reloadMeta = async () => {
+    try {
+      const pub = await api('/meta');
+      let adm = null;
+      if (getToken()) { try { adm = await api('/admin/meta', { admin: true }); } catch { adm = null; } }
+      setMeta(adm ? { ...pub, ...adm, counts: { ...pub.counts, ...adm.counts }, admin: true } : { ...pub, admin: false });
+    } catch (e) { setMetaErr(e.message); }
+  };
   useEffect(() => { reloadMeta(); }, [hash]);
 
   const [page, arg] = hash.split('/');
@@ -54,18 +62,18 @@ export default function App() {
   else if (page === 'browse') body = <Browse meta={meta} />;
   else body = <Home meta={meta} />;
 
-  const failed = meta && meta.runs ? meta.runs.filter((r) => r.ok === 0).map((r) => r.stage) : [];
-  const noRuns = meta && (!meta.runs || meta.runs.length === 0);
-  const admin = !!getToken();
+  const admin = !!(meta && meta.admin);
+  const failed = admin && meta.runs ? meta.runs.filter((r) => r.ok === 0).map((r) => r.stage) : [];
+  const noRuns = admin && (!meta.runs || meta.runs.length === 0);
   const queueCount = meta && meta.counts ? (meta.counts.review || 0) + (meta.counts.facets_review || 0) : 0;
 
   return (
     <div className="app">
       <header className="top">
         <div className="xpline" aria-hidden="true"><span style={{ width: `${meta && meta.counts && meta.counts.total ? Math.min(100, Math.round((100 * (meta.counts.matched || 0)) / meta.counts.total)) : 0}%` }} /></div>
-        <a className="brand" href="#/home">Survivors</a>
+        <a className="brand" href="#/home" title={admin ? 'Signed in as admin' : undefined}>Survivors</a>
         <nav>
-          {ROUTES.map(([k, label]) => (
+          {ROUTES.filter(([k]) => admin || (k !== 'queue' && k !== 'settings')).map(([k, label]) => (
             <a key={k} href={`#/${k}`} className={page === k ? 'on' : ''}>{label}{k === 'queue' && admin && queueCount ? <span className="navcount">{queueCount}</span> : null}{k === 'sale' && meta && meta.counts && meta.counts.on_sale ? <span className="navcount">{meta.counts.on_sale}</span> : null}</a>
           ))}
         </nav>
@@ -74,7 +82,8 @@ export default function App() {
       {failed.length > 0 && admin && <p className="bar warn">Last run failed for: {failed.join(', ')}. <a href="#/queue">See Queue</a>.</p>}
       {meta && meta.prices_stale && <p className="bar warn">Prices are more than two days old. The refresh stage has not run; check Queue.</p>}
       {meta && admin && meta.has_platprices_key === false && <p className="bar">No PlatPrices key on the worker yet. Matching and prices wait until it is added under Variables and Secrets.</p>}
-      {noRuns && !admin && <p className="bar">Nothing has run yet. Enter the admin token in Settings and run Discover.</p>}
+      {noRuns && <p className="bar">Nothing has run yet. Go to Queue and press Run everything.</p>}
+      {!admin && page === 'queue' ? null : null}
       <main><ErrorBoundary resetKey={hash}>{body}</ErrorBoundary></main>
       <footer className="foot">
         {meta && meta.counts ? <span>{meta.counts.matched || 0} games on the PS Store, {meta.counts.not_listed || 0} Steam-only, {meta.counts.enriched || 0} tracked. </span> : null}

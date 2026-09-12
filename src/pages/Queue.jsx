@@ -38,7 +38,7 @@ export default function Queue({ meta, onChange }) {
   useEffect(() => { if (getToken()) load(); }, []);
   useEffect(() => { if (hashArg) api(`/game/${hashArg}`).then((d) => setSingle(d.game)).catch((e) => setErr(e.message)); }, [hashArg]);
 
-  if (!getToken()) return <><h1>Queue</h1><p>Enter the admin token in <a href="#/settings">Settings</a> first.</p></>;
+  if (!getToken() || !(meta && meta.admin)) return <><h1>Queue</h1><p>Admin only. Enter the token in <a href="#/settings">Settings</a>.</p></>;
 
   const run = async (stage, loop = false) => {
     setBusy(stage);

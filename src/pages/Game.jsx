@@ -26,7 +26,7 @@ export default function Game({ appid, meta }) {
   if (err) return <p className="bar warn">{err}</p>;
   if (!d) return <p className="muted">Loading the run</p>;
   const g = d.game, p = g.psn, f = g.facets, ev = g.evidence || {};
-  const admin = !!getToken();
+  const admin = !!(meta && meta.admin);
   const taste = getLocalTaste() || (meta && meta.taste) || DEFAULT_SETTINGS;
   const verdict = dealVerdict(p);
   const cmp = getCompare();

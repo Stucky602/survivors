@@ -45,12 +45,13 @@ export default function Settings({ meta, onChange }) {
     <>
       <h1>Settings</h1>
       <h2>Admin token</h2>
-      <p className="muted">The ADMIN_TOKEN secret on the worker. Stored in this browser only.</p>
+      <p className="muted">The ADMIN_TOKEN secret on the worker, at least 24 characters. Stored in this browser only; sent as a bearer header to admin endpoints and nowhere else.</p>
       <div className="actions">
         <input type="password" value={token} onChange={(e) => setTok(e.target.value)} placeholder="token" />
         <button onClick={saveToken}>Use this token</button>
         {ok === true && <span className="sale">accepted</span>}
         {ok === false && <span className="warn-text">{err || 'rejected'}</span>}
+        {ok === true && <button onClick={() => { setToken(''); setTok(''); setOk(null); setS(null); onChange && onChange(); }}>Sign out</button>}
       </div>
 
       {s && (

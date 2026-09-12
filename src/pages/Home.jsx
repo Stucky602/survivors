@@ -37,7 +37,7 @@ export default function Home({ meta }) {
           ) : null}
         </div>
       </section>
-      {empty && <p className="bar">The catalog is empty. {getToken() ? <a href="#/queue">Run Discover in Queue</a> : <a href="#/settings">Enter the admin token</a>} to start.</p>}
+      {empty && <p className="bar">The catalog is empty.{meta && meta.admin ? <> <a href="#/queue">Run everything from Queue</a> to start.</> : ''}</p>}
 
       {d.rollPool && d.rollPool.length >= 3 && (<>
         <h2>Can't decide</h2>

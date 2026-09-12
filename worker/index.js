@@ -10,7 +10,8 @@ import { status as ppStatus, batch as ppBatch } from './lib/platprices.js';
 import { canSpend } from './lib/db.js';
 import { DEFAULT_SETTINGS, computeQuality, scoreGame, categorize, normalizeFacets, normalizeEvidence } from '../shared/score.js';
 
-const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
+const SEC_HEADERS = { 'x-content-type-options': 'nosniff', 'referrer-policy': 'strict-origin-when-cross-origin', 'x-frame-options': 'DENY', 'cache-control': 'no-store' };
+const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', ...SEC_HEADERS } });
 const bad = (msg, status = 400) => json({ error: msg }, status);
 
 const GAME_SELECT = `
@@ -85,25 +86,22 @@ async function handleApi(request, env, ctx) {
     const d = cache?.appdetails_json ? JSON.parse(cache.appdetails_json) : null;
     const rv = cache?.appreviews_json ? JSON.parse(cache.appreviews_json) : null;
     const reviews = rv ? (rv.reviews || []).slice().sort((a, b) => (b.votes_up || 0) - (a.votes_up || 0)).slice(0, 4).map((x) => ({ voted_up: x.voted_up, hours: x.hours, text: String(x.text || '').slice(0, 600) })) : [];
-    return json({ game: rowToGame(r, true), price_history: snaps, steam: d ? { short_description: d.short_description, about: (d.about || '').slice(0, 1500), genres: d.genres, categories: d.categories, metacritic: d.metacritic } : null, tags: cache?.tag_votes_json ? JSON.parse(cache.tag_votes_json).slice(0, 15) : [], reviews });
+    return json({ game: rowToGame(r, isAdmin(request, env)), price_history: snaps, steam: d ? { short_description: d.short_description, about: (d.about || '').slice(0, 1500), genres: d.genres, categories: d.categories, metacritic: d.metacritic } : null, tags: cache?.tag_votes_json ? JSON.parse(cache.tag_votes_json).slice(0, 15) : [], reviews });
   }
 
   if (m === 'GET' && path === '/meta') {
+    // Public: catalog counts, the taste weights the pages score with, price freshness. Nothing operational.
     const taste = { ...DEFAULT_SETTINGS, ...(await getSetting(env.DB, 'taste', {})) };
     const counts = await env.DB.prepare(
-      `SELECT SUM(status='enriched') AS enriched, SUM(status='new') AS pending, SUM(status='error') AS errors, SUM(psn_status='matched') AS matched, SUM(psn_status='not_listed') AS not_listed, SUM(psn_status='review') AS review, COUNT(*) AS total,
-              (SELECT COUNT(*) FROM facets WHERE needs_review = 1) AS facets_review,
+      `SELECT SUM(status='enriched') AS enriched, SUM(psn_status='matched') AS matched, SUM(psn_status='not_listed') AS not_listed, COUNT(*) AS total,
               (SELECT COUNT(*) FROM facets) AS tagged,
-              (SELECT COUNT(*) FROM facets WHERE model LIKE 'claude%') AS tagged_claude,
-              (SELECT COUNT(*) FROM facets WHERE reviews_at_tag < 0 AND confirmed_by IS NULL) AS retag_pending,
               (SELECT COUNT(*) FROM psn_products WHERE is_on_sale = 1 AND COALESCE(is_delisted,0) = 0 AND (discounted_until IS NULL OR discounted_until >= '${nowStamp()}')) AS on_sale
        FROM games`
     ).first();
     const lastRefresh = await env.DB.prepare('SELECT MAX(refreshed_at) AS t FROM psn_products').first();
     const ageH = lastRefresh?.t ? (Date.now() - Date.parse(lastRefresh.t)) / 36e5 : null;
-    return json({ taste, counts, runs: await lastRuns(env.DB), budget: await readBudget(env.DB), last_refresh: lastRefresh?.t || null, prices_stale: ageH != null && ageH > 48, region: env.REGION || 'US', has_platprices_key: !!env.PLATPRICES_KEY, plan_method: planMethod(env), plan: String(env.PLAN || 'free').toLowerCase(), tagger: env.ANTHROPIC_API_KEY ? (env.CLAUDE_MODEL || 'claude-haiku-4-5') : (env.AI_MODEL || 'workers-ai') });
+    return json({ taste, counts, last_refresh: lastRefresh?.t || null, prices_stale: ageH != null && ageH > 48, region: env.REGION || 'US' });
   }
-
 
   if (m === 'GET' && path === '/home') {
     const since = url.searchParams.get('since') || new Date(Date.now() - 7 * 864e5).toISOString();
@@ -129,6 +127,18 @@ async function handleApi(request, env, ctx) {
   const body = m === 'GET' ? {} : await request.json().catch(() => ({}));
 
   if (path === '/admin/whoami') return json({ admin: true });
+
+  if (m === 'GET' && path === '/admin/meta') {
+    const counts = await env.DB.prepare(
+      `SELECT SUM(status='new') AS pending, SUM(status='error') AS errors, SUM(psn_status='review') AS review,
+              (SELECT COUNT(*) FROM facets WHERE needs_review = 1) AS facets_review,
+              (SELECT COUNT(*) FROM facets WHERE model LIKE 'claude%') AS tagged_claude,
+              (SELECT COUNT(*) FROM facets WHERE reviews_at_tag < 0 AND confirmed_by IS NULL) AS retag_pending
+       FROM games`
+    ).first();
+    return json({ counts, runs: await lastRuns(env.DB), budget: await readBudget(env.DB), has_platprices_key: !!env.PLATPRICES_KEY, plan: String(env.PLAN || 'free').toLowerCase(),
+      plan_method: planMethod(env), tagger: env.ANTHROPIC_API_KEY ? (env.CLAUDE_MODEL || 'claude-haiku-4-5') : (env.AI_MODEL || 'workers-ai'), ai_capped_until: (await aiCapped(env)) ? await getSetting(env.DB, 'ai_capped_until', null) : null });
+  }
 
   if (m === 'POST' && /^\/admin\/run\/[\w-]+$/.test(path)) {
     const stage = path.split('/')[3];
