@@ -20,6 +20,14 @@ export default function Queue({ meta, onChange }) {
   const [dbgId, setDbgId] = useState('');
   const [dbg, setDbg] = useState(null);
   const loadPlanStats = () => api('/admin/plan-stats', { admin: true }).then(setPlanStats).catch((e) => setErr(e.message));
+  const [findQ, setFindQ] = useState('');
+  const [findRes, setFindRes] = useState(null);
+  const runFind = async () => {
+    if (!findQ.trim()) return;
+    setBusy('find'); setFindRes(null);
+    try { setFindRes(await api(`/admin/find?q=${encodeURIComponent(findQ.trim())}`, { admin: true })); } catch (e) { setErr(e.message); }
+    setBusy('');
+  };
   const [addInput, setAddInput] = useState('');
   const [addMsg, setAddMsg] = useState(null);
   const addGame = async () => {
@@ -136,6 +144,27 @@ export default function Queue({ meta, onChange }) {
           <tbody>{meta.runs.map((r) => <tr key={r.stage} className={r.ok === 0 ? 'bad' : ''}><td>{r.stage}</td><td>{(r.started_at || '').slice(0, 16).replace('T', ' ')}</td><td>{r.ok == null ? 'running' : r.ok ? 'ok' : 'failed'}</td><td className="num">{r.count}</td><td className="ev">{r.error}</td></tr>)}</tbody>
         </table>
       )}
+
+      <h2>Find a game in the database</h2>
+      <p className="muted">Searches every tracked game whatever its state, including ones the normal pages hide (never enriched, excluded, errored). Use this to answer "why isn't X here?".</p>
+      <div className="actions">
+        <input type="text" placeholder="name or appid" value={findQ} onChange={(e) => setFindQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && runFind()} style={{ minWidth: '260px' }} />
+        <button onClick={runFind} disabled={!!busy || !findQ.trim()}>{busy === 'find' ? 'Searching…' : 'Find'}</button>
+      </div>
+      {findRes && (findRes.found === 0
+        ? <p className="bar">Nothing in the database matches "{findRes.query}". It was never discovered — add it by hand below.</p>
+        : <table className="plain"><thead><tr><th>Game</th><th>appid</th><th>Status</th><th>PSN</th><th className="num">Score</th><th>Found via</th><th>Last error</th></tr></thead>
+            <tbody>{findRes.rows.map((r) => (
+              <tr key={r.appid} className={r.status !== 'enriched' ? 'bad' : ''}>
+                <td><a href={`#/game/${r.appid}`}>{r.name}</a></td>
+                <td className="muted">{r.appid}</td>
+                <td>{r.status}</td>
+                <td className="muted">{r.psn_status}{r.product_name ? ` (${r.product_name})` : ''}</td>
+                <td className="num">{r.score ?? '–'}</td>
+                <td className="muted">{r.source || '–'}</td>
+                <td className="ev">{r.last_error || ''}</td>
+              </tr>))}
+            </tbody></table>)}
 
       <h2>Add a game by hand</h2>
       <p className="muted">Tag discovery only finds games carrying Steam's Bullet Heaven tag, so anything not tagged yet is invisible to it. Paste a Steam appid or store URL to track it regardless.</p>

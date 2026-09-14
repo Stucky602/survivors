@@ -16,7 +16,7 @@ const bad = (msg, status = 400) => json({ error: msg }, status);
 
 const GAME_SELECT = `
   SELECT g.appid, g.name, g.steam_release, g.coming_soon, g.developer, g.publisher, g.header_img, g.early_access, g.status, g.psn_status, g.ppid,
-         g.tag_votes, g.steam_pos, g.steam_neg, g.steam_score_desc, g.last_error,
+         g.tag_votes, g.steam_pos, g.steam_neg, g.steam_score_desc, g.last_error, g.source, g.first_seen,
          p.product_name, p.edition, p.psn_url, p.pp_url, p.img, p.is_ps4, p.is_ps5, p.is_preorder, p.is_delisted, p.is_on_sale,
          p.base_price, p.sale_price, p.plus_price, p.disc_perc, p.discounted_until, p.f_base, p.f_sale, p.f_plus,
          p.star_rating, p.star_count, p.psp_extra, p.psp_premium, p.lowest_ever, p.lowest_seen, p.release_date AS psn_release, p.refreshed_at,
@@ -37,7 +37,7 @@ function rowToGame(r, full = false) {
   const out = {
     appid: r.appid, name: r.name, steam_release: r.steam_release, coming_soon: !!r.coming_soon, developer: r.developer, publisher: r.publisher,
     header_img: r.header_img, early_access: !!r.early_access, status: r.status, psn_status: r.psn_status, ppid: r.ppid,
-    tag_votes: r.tag_votes, steam_pos: r.steam_pos, steam_neg: r.steam_neg, steam_score_desc: r.steam_score_desc,
+    tag_votes: r.tag_votes, steam_pos: r.steam_pos, steam_neg: r.steam_neg, steam_score_desc: r.steam_score_desc, source: r.source, first_seen: r.first_seen,
     psn: r.ppid ? {
       product_name: r.product_name, edition: r.edition, url: r.psn_url, pp_url: r.pp_url, img: r.img, is_ps4: !!r.is_ps4, is_ps5: !!r.is_ps5,
       is_preorder: !!r.is_preorder, is_delisted: !!r.is_delisted, is_on_sale: saleLive, sale_expired: !!r.is_on_sale && !saleLive,
@@ -247,6 +247,21 @@ async function handleApi(request, env, ctx) {
     const news = await env.DB.prepare(`SELECT SUM(c.news_json IS NULL) AS missing, SUM(c.news_json = '[]') AS empty, SUM(c.news_json IS NOT NULL AND c.news_json != '[]') AS has_news, COUNT(*) AS total FROM games g LEFT JOIN steam_cache c ON c.appid = g.appid WHERE g.status = 'enriched'`).first();
     return json({ method: planMethod(env), by_status: by, news });
   }
+  // Find any tracked game by name or appid, whatever state it is in. Views only show enriched games, so a game
+  // stuck at 'new', marked 'excluded', or never discovered is invisible everywhere else -- this sees all of them.
+  if (m === 'GET' && path === '/admin/find') {
+    const q = (url.searchParams.get('q') || '').trim();
+    if (!q) return bad('q required');
+    const like = `%${q.replace(/[%_]/g, '')}%`;
+    const { results } = await env.DB.prepare(
+      `SELECT g.appid, g.name, g.status, g.psn_status, g.source, g.first_seen, g.last_enriched, g.last_error, g.error_count,
+              g.steam_pos, g.steam_neg, g.ppid, f.score, f.category, p.product_name
+       FROM games g LEFT JOIN facets f ON f.appid = g.appid LEFT JOIN psn_products p ON p.ppid = g.ppid
+       WHERE g.name LIKE ? OR CAST(g.appid AS TEXT) = ? ORDER BY g.name LIMIT 25`
+    ).bind(like, q).all();
+    return json({ query: q, found: results.length, rows: results });
+  }
+
   if (m === 'POST' && path === '/admin/add-game') {
     const r = await addGame(env, body.input);
     return r.ok ? json(r) : bad(r.error);

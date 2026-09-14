@@ -146,6 +146,12 @@ export default function Game({ appid, meta }) {
             {d.steam && d.steam.metacritic ? <><dt>Metacritic</dt><dd>{d.steam.metacritic.score}</dd></> : null}
             {d.steam && d.steam.categories ? <><dt>Features</dt><dd>{d.steam.categories.filter((c) => /co-op|controller|cloud|achieve|remote play/i.test(c)).join(', ') || '–'}</dd></> : null}
             {d.tags && d.tags.length ? <><dt>Tags</dt><dd>{d.tags.map((t) => `${t.name} (${t.count})`).join(', ')}</dd></> : null}
+            <dt>How it got here</dt><dd>
+              {g.source && g.source.startsWith('tag:')
+                ? <>Steam's <b>{g.source.slice(4)}</b> tag search{g.tag_votes ? `, ${g.tag_votes} votes for that tag` : ', too few votes for the tag to show on the store page'}</>
+                : g.source === 'manual' ? 'Added by hand' : <span className="muted">{g.source || 'unknown'}</span>}
+              {g.first_seen ? <span className="muted"> · first seen {fmtDate(g.first_seen)}</span> : null}
+            </dd>
           </dl>
           {d.steam && d.steam.short_description ? <p>{d.steam.short_description}</p> : null}
           {d.reviews && d.reviews.length ? (
