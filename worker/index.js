@@ -1,5 +1,5 @@
 // Survivors worker: API routes, cron stages, and the static site (via the assets binding).
-import { STAGES, acceptMatch, aiCapped, planDebug, planMethod } from './lib/stages.js';
+import { STAGES, acceptMatch, aiCapped, planDebug, planMethod, matchDebug } from './lib/stages.js';
 import { Runner, pickStage } from './lib/runner.js';
 import { claudeSpend } from './lib/ai.js';
 export { Runner };
@@ -244,6 +244,11 @@ async function handleApi(request, env, ctx) {
     const by = (await env.DB.prepare(`SELECT COALESCE(ps5_plan,'(unread)') AS status, COALESCE(ps5_plan_method,'') AS method, COUNT(*) AS n FROM games WHERE status = 'enriched' AND ppid IS NULL GROUP BY 1, 2 ORDER BY n DESC`).all()).results;
     const news = await env.DB.prepare(`SELECT SUM(c.news_json IS NULL) AS missing, SUM(c.news_json = '[]') AS empty, SUM(c.news_json IS NOT NULL AND c.news_json != '[]') AS has_news, COUNT(*) AS total FROM games g LEFT JOIN steam_cache c ON c.appid = g.appid WHERE g.status = 'enriched'`).first();
     return json({ method: planMethod(env), by_status: by, news });
+  }
+  if (m === 'GET' && path === '/admin/match-debug') {
+    const appid = Number(url.searchParams.get('appid'));
+    if (!appid) return bad('appid required');
+    return json(await matchDebug(env, appid));
   }
   if (m === 'GET' && path === '/admin/plan-debug') {
     const appid = Number(url.searchParams.get('appid'));

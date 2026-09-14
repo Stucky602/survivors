@@ -20,6 +20,9 @@ export default function Queue({ meta, onChange }) {
   const [dbgId, setDbgId] = useState('');
   const [dbg, setDbg] = useState(null);
   const loadPlanStats = () => api('/admin/plan-stats', { admin: true }).then(setPlanStats).catch((e) => setErr(e.message));
+  const [mdbgId, setMdbgId] = useState('');
+  const [mdbg, setMdbg] = useState(null);
+  const runMatchDebug = async () => { if (!mdbgId) return; setBusy('mdbg'); setMdbg(null); try { setMdbg(await api(`/admin/match-debug?appid=${Number(mdbgId)}`, { admin: true })); } catch (e) { setErr(e.message); } setBusy(''); };
   const runDebug = async () => { if (!dbgId) return; setBusy('dbg'); setDbg(null); try { setDbg(await api(`/admin/plan-debug?appid=${Number(dbgId)}`, { admin: true })); } catch (e) { setErr(e.message); } setBusy(''); };
   const setScope = (v) => { setScopeState(v); localStorage.setItem('survivors.scope', v); };
   const hashArg = location.hash.split('/')[2];
@@ -124,6 +127,28 @@ export default function Queue({ meta, onChange }) {
           <tbody>{meta.runs.map((r) => <tr key={r.stage} className={r.ok === 0 ? 'bad' : ''}><td>{r.stage}</td><td>{(r.started_at || '').slice(0, 16).replace('T', ' ')}</td><td>{r.ok == null ? 'running' : r.ok ? 'ok' : 'failed'}</td><td className="num">{r.count}</td><td className="ev">{r.error}</td></tr>)}</tbody>
         </table>
       )}
+
+      <h2>Matching, under the hood</h2>
+      <p className="muted">Runs one game through the whole match path live and shows every step: the search terms tried, what PlatPrices returned, whether an exact title match was found, and what the model made of it. Use a Steam appid from any game's page.</p>
+      <div className="actions">
+        <input type="number" placeholder="appid" value={mdbgId} onChange={(e) => setMdbgId(e.target.value)} />
+        <button onClick={runMatchDebug} disabled={!!busy || !mdbgId}>{busy === 'mdbg' ? 'Testing…' : 'Test match one game'}</button>
+      </div>
+      {mdbg && (mdbg.error ? <p className="bar warn">{mdbg.error}</p> : (
+        <div className="editor">
+          <p><b>{mdbg.name}</b> <span className="muted">status {mdbg.psn_status}{mdbg.ppid ? `, ppid ${mdbg.ppid}` : ''}</span></p>
+          <p className="muted">Search terms tried: {mdbg.variants.join(' | ')}</p>
+          <p className="muted">Results: {mdbg.searches.map((x) => `"${x.query}" → ${x.error ? `ERROR ${x.error}` : `${x.returned} candidates`}`).join('; ') || 'none'}</p>
+          <p>Normalised title: <code>{mdbg.normalised_query}</code> — exact match: {mdbg.exact_title_match ? <b className="sale">{mdbg.exact_title_match.ProductName} (ppid {mdbg.exact_title_match.PPID})</b> : <span className="muted">none</span>}</p>
+          {mdbg.candidates && mdbg.candidates.length > 0 && (
+            <table className="plain"><thead><tr><th>PPID</th><th>Product</th><th>Class</th><th>Normalised</th></tr></thead>
+              <tbody>{mdbg.candidates.map((c) => <tr key={c.PPID}><td>{c.PPID}</td><td>{c.ProductName}</td><td className="muted">{c.StoreClass}</td><td className="muted"><code>{c.normalised}</code></td></tr>)}</tbody></table>
+          )}
+          {mdbg.model_error ? <p className="warn-text">Model error: {mdbg.model_error}</p> : null}
+          {mdbg.model_raw ? <><p className="muted">Model ({mdbg.model}) said:</p><pre className="log">{mdbg.model_raw}</pre></> : null}
+          {mdbg.last_error ? <p className="muted">Last stored error: {mdbg.last_error}</p> : null}
+        </div>
+      ))}
 
       <h2>PS Store plans, under the hood</h2>
       <p className="muted">Every game gets the free Steam-news read first. {meta && meta.plan_method === 'web' ? <><b>Web search is on</b> for games that the news read could not answer, scoring 70 or better with 50+ reviews, two searches each, inside the monthly Claude cap. A game that has had a web read is never web-read again, whatever its score.</> : <>Web search is off. Set PLANS_WEB_SEARCH to 1 to add a paid Claude web read for high-scoring games the news read could not answer; it stays inside the CLAUDE_BUDGET_USD cap.</>}</p>

@@ -162,6 +162,60 @@ export function nameVariants(name) {
   return out.slice(0, 3);
 }
 
+
+// Deterministic fallback matcher. A normalised exact title match is more reliable than a small model's judgement,
+// so it is tried first; the model only has to adjudicate the ambiguous cases.
+export function normaliseTitle(x) {
+  return String(x || '')
+    .toLowerCase()
+    .replace(/[™®©]/g, '')
+    .replace(/\b(complete|definitive|ultimate|deluxe|goty|game of the year|anniversary|remastered|enhanced|console|special|gold|premium|standard)\b/g, '')
+    .replace(/\bedition\b/g, '')
+    .replace(/\b(ps4|ps5|playstation ?[45]?)\b/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+// Returns the best candidate by exact normalised title, preferring a full game over bundles and the cheapest edition.
+export function pickByTitle(name, cands) {
+  const want = normaliseTitle(name);
+  if (!want) return null;
+  const hits = cands.filter((c) => normaliseTitle(c.ProductName) === want);
+  if (!hits.length) return null;
+  const full = hits.filter((c) => String(c.StoreClass || '').toUpperCase() === 'FULL_GAME');
+  const pool = full.length ? full : hits;
+  return pool.sort((a, b) => (Number(a.BasePrice) || 1e9) - (Number(b.BasePrice) || 1e9))[0];
+}
+
+// One game, live, showing every step of the match decision. Backs the Queue diagnostic.
+export async function matchDebug(env, appid) {
+  const g = await env.DB.prepare(`SELECT appid, name, developer, publisher, steam_release, psn_status, ppid, next_match_at, last_error FROM games WHERE appid = ?`).bind(appid).first();
+  if (!g) return { error: 'no such game' };
+  const out = { appid: g.appid, name: g.name, psn_status: g.psn_status, ppid: g.ppid, next_match_at: g.next_match_at, last_error: g.last_error, variants: nameVariants(g.name), searches: [] };
+  let cands = [];
+  for (const q of nameVariants(g.name)) {
+    if (cands.length) break;
+    try {
+      const r = (await pp.searchGames(env, q)).filter((c) => Number(c.IsDLC) !== 1 && Number(c.IsDemoOrSoundtrack) !== 1);
+      out.searches.push({ query: q, returned: r.length });
+      cands = r;
+    } catch (e) { out.searches.push({ query: q, error: String(e.message || e) }); }
+  }
+  out.candidates = cands.slice(0, 10).map((c) => ({ PPID: c.PPID, ProductName: c.ProductName, StoreClass: c.StoreClass, BasePrice: c.BasePrice, normalised: normaliseTitle(c.ProductName) }));
+  out.normalised_query = normaliseTitle(g.name);
+  const byTitle = pickByTitle(g.name, cands);
+  out.exact_title_match = byTitle ? { PPID: byTitle.PPID, ProductName: byTitle.ProductName } : null;
+  if (cands.length) {
+    try {
+      const ai = await runJSON(env, { system: MATCH_SYSTEM, user: matchUser({ name: g.name, developer: g.developer, publisher: g.publisher, release: g.steam_release }, cands), maxTokens: 200, model: smallModel(env) });
+      out.model = ai.model;
+      out.model_raw = String(ai.text || '').slice(0, 800);
+      out.model_parsed = ai.json;
+    } catch (e) { out.model_error = String(e.message || e); }
+  }
+  return out;
+}
+
 // 3. Match: find the PSN listing for enriched, unmatched games. Gated by score so PlatPrices' limited monthly
 // quota goes to games actually worth buying: below match_min_score, a game waits until it is tagged and clears
 // the bar, or until Kevin marks it "want" (which always bypasses the gate). Score 0 in Settings disables the gate.
@@ -196,10 +250,17 @@ export async function match(env, opts = {}) {
           await env.DB.prepare(`UPDATE games SET psn_status = 'not_listed', next_match_at = ? WHERE appid = ?`).bind(daysFromNow(7), g.appid).run();
           n++; continue;
         }
-        const ai = await runJSON(env, { system: MATCH_SYSTEM, user: matchUser({ name: g.name, developer: g.developer, publisher: g.publisher, release: g.steam_release }, cands), maxTokens: 200, model: smallModel(env) });
-        const pick = ai.json || {};
+        // Exact normalised title match wins outright -- no model judgement needed, and it cannot be lost to bad JSON.
+        const exact = pickByTitle(g.name, cands);
+        let ai = { json: null, text: '' };
+        if (!exact) {
+          ai = await runJSON(env, { system: MATCH_SYSTEM, user: matchUser({ name: g.name, developer: g.developer, publisher: g.publisher, release: g.steam_release }, cands), maxTokens: 200, model: smallModel(env) });
+        }
+        const pick = exact ? { ppid: exact.PPID, confidence: 1, reason: 'exact title match' } : (ai.json || {});
         const chosen = cands.find((c) => Number(c.PPID) === Number(pick.ppid));
         const conf = Number(pick.confidence) || 0;
+        // A model that returned nothing parseable is not evidence the game is absent from the store.
+        const modelFailed = !exact && !ai.json;
         await env.DB.prepare(`INSERT INTO match_candidates (appid, candidates_json, ai_json, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(appid) DO UPDATE SET candidates_json = excluded.candidates_json, ai_json = excluded.ai_json, created_at = excluded.created_at`)
           .bind(g.appid, JSON.stringify(cands.slice(0, 40)), JSON.stringify(pick), now()).run();
         const mode = await getSetting(env.DB, 'review_mode', 'auto');
@@ -208,6 +269,12 @@ export async function match(env, opts = {}) {
           await acceptMatch(env, g.appid, chosen);
         } else if (chosen && conf >= 0.5 && mode !== 'auto') {
           await env.DB.prepare(`UPDATE games SET psn_status = 'review', next_match_at = NULL WHERE appid = ?`).bind(g.appid).run();
+        } else if (modelFailed) {
+          // Retry sooner and say why, rather than declaring the game absent on the strength of a parse failure.
+          failed++;
+          if (!firstError) firstError = `model returned no usable JSON for "${g.name}"`;
+          await env.DB.prepare(`UPDATE games SET last_error = ?, next_match_at = ? WHERE appid = ?`)
+            .bind(`match: model returned no usable JSON (${cands.length} candidates were available)`, daysFromNow(0.25), g.appid).run();
         } else {
           await env.DB.prepare(`UPDATE games SET psn_status = 'not_listed', next_match_at = ? WHERE appid = ?`).bind(daysFromNow(7), g.appid).run();
         }

@@ -71,3 +71,22 @@ assert.equal(parsePlan({ ps5_status: 'listed', source_url: 'https://store.playst
 assert.equal(parsePlan({ ps5_status: 'garbage' }).status, 'unknown');
 assert.equal(parsePlan(null).status, 'unknown');
 console.log('parse.test v0.9: ok');
+
+// v0.12: deterministic title matching
+import { normaliseTitle, pickByTitle } from '../worker/lib/stages.js';
+assert.equal(normaliseTitle('Nordic Ashes: Survivors of Ragnarok'), 'nordic ashes survivors of ragnarok');
+assert.equal(normaliseTitle('Halls of Torment - Definitive Edition'), 'halls of torment');
+assert.equal(normaliseTitle('Deep Rock Galactic: Survivor™'), 'deep rock galactic survivor');
+assert.equal(normaliseTitle('Megabonk  PS5'), 'megabonk');
+// exact match beats a bundle, cheapest full game wins
+const cands = [
+  { PPID: 1, ProductName: 'Death Must Die Bundle', StoreClass: 'BUNDLE', BasePrice: 3000 },
+  { PPID: 2, ProductName: 'Death Must Die', StoreClass: 'FULL_GAME', BasePrice: 1999 },
+  { PPID: 3, ProductName: 'Death Must Die - Deluxe Edition', StoreClass: 'FULL_GAME', BasePrice: 2999 }
+];
+assert.equal(pickByTitle('Death Must Die', cands).PPID, 2);
+// an edition-only listing still matches when no plain edition exists
+assert.equal(pickByTitle('Halls of Torment', [{ PPID: 9, ProductName: 'Halls of Torment: Definitive Edition', StoreClass: 'FULL_GAME', BasePrice: 1499 }]).PPID, 9);
+// unrelated games must not match
+assert.equal(pickByTitle('Vampire Survivors', [{ PPID: 5, ProductName: 'Zombie Survivors', StoreClass: 'FULL_GAME', BasePrice: 500 }]), null);
+console.log('parse.test v0.12: ok');
