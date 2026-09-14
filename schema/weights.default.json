@@ -24,6 +24,6 @@
   },
   "queue_threshold": 70,
   "wildcard_max_reviews": 50,
-  "match_min_score": 70,
+  "match_min_score": 55,
   "region": "US"
 }

@@ -4,8 +4,8 @@ import FacetEditor from '../components/FacetEditor.jsx';
 
 const SCOPES = [['all', 'Everything', 'every tracked game'], ['available', 'Available now', 'released on Steam or the PS Store'], ['upcoming', 'Upcoming', 'not out anywhere yet']];
 
-const STAGES = ['discover', 'enrich', 'match', 'refresh', 'tag', 'plans', 'rescore'];
-const LABEL = { discover: 'Discover', enrich: 'Enrich', match: 'Match', refresh: 'Refresh', tag: 'Tag', plans: 'PS Store plans', rescore: 'Rescore' };
+const STAGES = ['discover', 'enrich', 'match', 'refresh', 'deals', 'tag', 'plans', 'rescore'];
+const LABEL = { discover: 'Discover', enrich: 'Enrich', match: 'Match', refresh: 'Refresh', deals: 'Deals feed', tag: 'Tag', plans: 'PS Store plans', rescore: 'Rescore' };
 
 export default function Queue({ meta, onChange }) {
   const [q, setQ] = useState(null);
@@ -20,6 +20,15 @@ export default function Queue({ meta, onChange }) {
   const [dbgId, setDbgId] = useState('');
   const [dbg, setDbg] = useState(null);
   const loadPlanStats = () => api('/admin/plan-stats', { admin: true }).then(setPlanStats).catch((e) => setErr(e.message));
+  const [addInput, setAddInput] = useState('');
+  const [addMsg, setAddMsg] = useState(null);
+  const addGame = async () => {
+    if (!addInput.trim()) return;
+    setBusy('add'); setAddMsg(null);
+    try { const r = await api('/admin/add-game', { method: 'POST', admin: true, body: { input: addInput } }); setAddMsg(`${r.name}: ${r.note}`); setAddInput(''); load(); onChange && onChange(); }
+    catch (e) { setAddMsg(e.message); }
+    setBusy('');
+  };
   const [mdbgId, setMdbgId] = useState('');
   const [mdbg, setMdbg] = useState(null);
   const runMatchDebug = async () => { if (!mdbgId) return; setBusy('mdbg'); setMdbg(null); try { setMdbg(await api(`/admin/match-debug?appid=${Number(mdbgId)}`, { admin: true })); } catch (e) { setErr(e.message); } setBusy(''); };
@@ -127,6 +136,14 @@ export default function Queue({ meta, onChange }) {
           <tbody>{meta.runs.map((r) => <tr key={r.stage} className={r.ok === 0 ? 'bad' : ''}><td>{r.stage}</td><td>{(r.started_at || '').slice(0, 16).replace('T', ' ')}</td><td>{r.ok == null ? 'running' : r.ok ? 'ok' : 'failed'}</td><td className="num">{r.count}</td><td className="ev">{r.error}</td></tr>)}</tbody>
         </table>
       )}
+
+      <h2>Add a game by hand</h2>
+      <p className="muted">Tag discovery only finds games carrying Steam's Bullet Heaven tag, so anything not tagged yet is invisible to it. Paste a Steam appid or store URL to track it regardless.</p>
+      <div className="actions">
+        <input type="text" placeholder="1794680 or store.steampowered.com/app/1794680/" value={addInput} onChange={(e) => setAddInput(e.target.value)} style={{ minWidth: '320px' }} />
+        <button className="primary" onClick={addGame} disabled={!!busy || !addInput.trim()}>{busy === 'add' ? 'Adding…' : 'Add game'}</button>
+        {addMsg && <span className="muted">{addMsg}</span>}
+      </div>
 
       <h2>Matching, under the hood</h2>
       <p className="muted">Runs one game through the whole match path live and shows every step: the search terms tried, what PlatPrices returned, whether an exact title match was found, and what the model made of it. Use a Steam appid from any game's page.</p>

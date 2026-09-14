@@ -90,3 +90,25 @@ assert.equal(pickByTitle('Halls of Torment', [{ PPID: 9, ProductName: 'Halls of 
 // unrelated games must not match
 assert.equal(pickByTitle('Vampire Survivors', [{ PPID: 5, ProductName: 'Zombie Survivors', StoreClass: 'FULL_GAME', BasePrice: 500 }]), null);
 console.log('parse.test v0.12: ok');
+
+// v0.12.1: subtitle-dropping console listings
+import { titleSimilarity } from '../worker/lib/stages.js';
+assert.equal(titleSimilarity('Nordic Ashes: Survivors of Ragnarok', 'Nordic Ashes') >= 0.9, true);
+assert.equal(titleSimilarity('Deadly Days: Roadtrip', 'Deadly Days Roadtrip'), 1);
+assert.equal(titleSimilarity('Vampire Survivors', 'Zombie Survivors') < 0.5, true);
+assert.equal(titleSimilarity('Halls of Torment', 'Halls of Torment: Definitive Edition'), 1);
+assert.ok(titleSimilarity('Brotato', 'Brotato: Deluxe') >= 0.5);
+// a single short shared word must not be enough
+assert.ok(titleSimilarity('Loot', 'Loot Survivor') < 0.9);
+assert.equal(pickByTitle('Nordic Ashes: Survivors of Ragnarok', [{ PPID: 7, ProductName: 'Nordic Ashes', StoreClass: 'FULL_GAME', BasePrice: 1499 }]).PPID, 7);
+assert.equal(pickByTitle('Vampire Survivors', [{ PPID: 8, ProductName: 'Zombie Survivors', StoreClass: 'FULL_GAME', BasePrice: 500 }]), null);
+console.log('parse.test v0.12.1: ok');
+
+// v0.13: manual add input parsing
+import { parseAppid } from '../worker/lib/stages.js';
+assert.equal(parseAppid('1794680'), 1794680);
+assert.equal(parseAppid('https://store.steampowered.com/app/1794680/Vampire_Survivors/'), 1794680);
+assert.equal(parseAppid('store.steampowered.com/app/2739020'), 2739020);
+assert.equal(parseAppid('not a game'), null);
+assert.equal(parseAppid(''), null);
+console.log('parse.test v0.13: ok');

@@ -353,3 +353,12 @@ The threshold lives in `taste.match_min_score` in D1, not an environment variabl
 Match was skipping every game with "budget reserve" while PlatPrices' own `/status` showed 1,000 of 1,000 requests untouched. Cause: `noteBudgetHeaders()` read `headers.get('X-RateLimit-Remaining')`, which returns `null` for a header that isn't present -- and `Number(null)` is `0`, not `NaN`, so a header PlatPrices likely never sends (the exact name was guessed, never verified against a real response) was silently recorded as "zero requests remaining," permanently. `canSpend()` was working correctly the whole time; it was trusting a manufactured lie.
 
 Fixed two ways. `noteBudgetHeaders()` now checks for the header's presence before touching it, so a missing header is ignored rather than treated as zero. And because a guessed header name could always be wrong again, the tracker no longer depends on it alone: `syncBudgetFromStatus()` writes PlatPrices' authoritative `/status` numbers straight into the same tracked row, called both from the admin "Check live" button (which now corrects the stuck tracker on the spot instead of only displaying it) and once a day automatically, piggybacked on the existing daily discover run. A future header problem can wedge things for at most a day, never permanently.
+
+
+## 20. v0.13: deals feed, a lower bar, and a manual door (Sep 14)
+
+**Deals feed.** PlatPrices' list endpoints return a whole page of discounted products per request, where the per-game refresh spends one request per game. A new `deals` stage pages the discount feed (4 pages free, 8 paid), updates prices for anything already tracked, and reports how many discounted products it saw that are not in the catalogue. Cron runs it daily alongside discover and refresh. Response shape is read defensively via `unwrapList()` since the exact envelope key is not guaranteed.
+
+**Default match threshold 55, was 70.** Wildkeepers Rising scores lower than it deserves, which is a scoring-calibration problem, not a reason to never look at the game. A lower bar costs a few more PlatPrices requests and stops the gate hiding things Kevin would actually buy. Still live-adjustable in Settings.
+
+**Manual add.** Tag discovery only sees games carrying Steam's Bullet Heaven tag, so anything not tagged yet is invisible -- Entropy Survivors is on both Steam and PSN and was never discovered. Queue now takes a Steam appid or store URL and inserts the game directly; the Runner enriches, scores and matches it like any other. `parseAppid()` accepts a bare id or a store URL.

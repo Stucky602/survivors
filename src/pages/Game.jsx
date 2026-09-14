@@ -101,7 +101,14 @@ export default function Game({ appid, meta }) {
             </dl>
           ) : (
             <>
-              <p className="muted">{g.psn_status === 'review' ? 'A candidate match is waiting in Queue.' : g.psn_status === 'not_listed' ? 'No PS Store listing found. Rechecked weekly.' : 'Not matched yet.'} <a href={`https://store.playstation.com/en-us/search/${encodeURIComponent(g.name)}`} target="_blank" rel="noreferrer">Search the PS Store</a></p>
+              <p className="muted">{(() => {
+                const min = d.match_min_score || 0;
+                if (g.psn_status === 'review') return 'A candidate match is waiting in Queue.';
+                if (g.psn_status === 'not_listed') return 'No PS Store listing found. Rechecked weekly.';
+                if (min > 0 && !g.want && g.score == null) return `Not searched yet: nothing is matched to the PS Store until it has been scored, and the minimum score to bother searching is ${min}.`;
+                if (min > 0 && !g.want && g.score != null && g.score < min) return `Not searched on purpose: this scores ${g.score}, below the current minimum of ${min}, so it is skipped to save PlatPrices quota. Lower the minimum in Settings, or mark it "want" to search it anyway.`;
+                return 'Not matched yet.';
+              })()} <a href={`https://store.playstation.com/en-us/search/${encodeURIComponent(g.name)}`} target="_blank" rel="noreferrer">Search the PS Store</a></p>
               <dl>
                 <dt>PlayStation plans</dt><dd><Ps5Plan g={g} long />{g.ps5_plan ? <span className="muted"> (read {fmtDate(g.ps5_plan.at)})</span> : null}</dd>
               </dl>

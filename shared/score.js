@@ -21,7 +21,7 @@ export const DEFAULT_SETTINGS = {
   wildcard_max_reviews: 50,
   // Below this score, a game is not matched to PSN (saves PlatPrices quota) and not given a paid web plan-search
   // (saves Claude spend). 0 means no minimum, match and search everything. A "want" game always bypasses this.
-  match_min_score: 70
+  match_min_score: 55
 };
 
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));

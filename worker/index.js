@@ -1,5 +1,5 @@
 // Survivors worker: API routes, cron stages, and the static site (via the assets binding).
-import { STAGES, acceptMatch, aiCapped, planDebug, planMethod, matchDebug } from './lib/stages.js';
+import { STAGES, acceptMatch, aiCapped, planDebug, planMethod, matchDebug, addGame } from './lib/stages.js';
 import { Runner, pickStage } from './lib/runner.js';
 import { claudeSpend } from './lib/ai.js';
 export { Runner };
@@ -82,11 +82,13 @@ async function handleApi(request, env, ctx) {
     const r = await env.DB.prepare(`${GAME_SELECT} WHERE g.appid = ?`).bind(appid).first();
     if (!r) return bad('not found', 404);
     const snaps = r.ppid ? (await env.DB.prepare('SELECT observed_at, base_price, sale_price, plus_price FROM price_snapshots WHERE ppid = ? ORDER BY observed_at').bind(r.ppid).all()).results : [];
+    const taste = { ...DEFAULT_SETTINGS, ...(await getSetting(env.DB, 'taste', {})) };
+    const matchMin = Number(taste.match_min_score) || 0;
     const cache = await env.DB.prepare('SELECT appdetails_json, appreviews_json, tag_votes_json FROM steam_cache WHERE appid = ?').bind(appid).first();
     const d = cache?.appdetails_json ? JSON.parse(cache.appdetails_json) : null;
     const rv = cache?.appreviews_json ? JSON.parse(cache.appreviews_json) : null;
     const reviews = rv ? (rv.reviews || []).slice().sort((a, b) => (b.votes_up || 0) - (a.votes_up || 0)).slice(0, 4).map((x) => ({ voted_up: x.voted_up, hours: x.hours, text: String(x.text || '').slice(0, 600) })) : [];
-    return json({ game: rowToGame(r, isAdmin(request, env)), price_history: snaps, steam: d ? { short_description: d.short_description, about: (d.about || '').slice(0, 1500), genres: d.genres, categories: d.categories, metacritic: d.metacritic } : null, tags: cache?.tag_votes_json ? JSON.parse(cache.tag_votes_json).slice(0, 15) : [], reviews });
+    return json({ match_min_score: matchMin, game: rowToGame(r, isAdmin(request, env)), price_history: snaps, steam: d ? { short_description: d.short_description, about: (d.about || '').slice(0, 1500), genres: d.genres, categories: d.categories, metacritic: d.metacritic } : null, tags: cache?.tag_votes_json ? JSON.parse(cache.tag_votes_json).slice(0, 15) : [], reviews });
   }
 
   if (m === 'GET' && path === '/meta') {
@@ -245,6 +247,11 @@ async function handleApi(request, env, ctx) {
     const news = await env.DB.prepare(`SELECT SUM(c.news_json IS NULL) AS missing, SUM(c.news_json = '[]') AS empty, SUM(c.news_json IS NOT NULL AND c.news_json != '[]') AS has_news, COUNT(*) AS total FROM games g LEFT JOIN steam_cache c ON c.appid = g.appid WHERE g.status = 'enriched'`).first();
     return json({ method: planMethod(env), by_status: by, news });
   }
+  if (m === 'POST' && path === '/admin/add-game') {
+    const r = await addGame(env, body.input);
+    return r.ok ? json(r) : bad(r.error);
+  }
+
   if (m === 'GET' && path === '/admin/match-debug') {
     const appid = Number(url.searchParams.get('appid'));
     if (!appid) return bad('appid required');
@@ -301,7 +308,7 @@ export default {
     // One cheap stage per tick (stays under the 50-subrequest cap), then hand the rest to the Runner,
     // which drains enrich/match/tag one batch per alarm in fresh invocations.
     ctx.waitUntil((async () => {
-      if (event.cron === '0 9 * * *') { await STAGES.discover(env, {}); await STAGES.refresh(env, {}); }
+      if (event.cron === '0 9 * * *') { await STAGES.discover(env, {}); await STAGES.deals(env, {}); await STAGES.refresh(env, {}); }
       if (env.RUNNER) {
         const id = env.RUNNER.idFromName('main');
         await env.RUNNER.get(id).fetch(new Request('https://runner/start'));

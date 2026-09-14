@@ -176,15 +176,41 @@ export function normaliseTitle(x) {
     .trim();
 }
 
-// Returns the best candidate by exact normalised title, preferring a full game over bundles and the cheapest edition.
-export function pickByTitle(name, cands) {
-  const want = normaliseTitle(name);
-  if (!want) return null;
-  const hits = cands.filter((c) => normaliseTitle(c.ProductName) === want);
-  if (!hits.length) return null;
-  const full = hits.filter((c) => String(c.StoreClass || '').toUpperCase() === 'FULL_GAME');
-  const pool = full.length ? full : hits;
-  return pool.sort((a, b) => (Number(a.BasePrice) || 1e9) - (Number(b.BasePrice) || 1e9))[0];
+// How confidently do two normalised titles refer to the same game? 1 = exact.
+// Console listings routinely drop a subtitle ("Nordic Ashes: Survivors of Ragnarok" ships as "Nordic Ashes"),
+// so a whole-word prefix counts strongly; otherwise fall back to token overlap, which keeps
+// "Vampire Survivors" from matching "Zombie Survivors".
+export function titleSimilarity(a, b) {
+  const x = normaliseTitle(a), y = normaliseTitle(b);
+  if (!x || !y) return 0;
+  if (x === y) return 1;
+  const short = x.length <= y.length ? x : y;
+  const long = x.length <= y.length ? y : x;
+  // whole-word prefix: the shorter title is how the longer one begins
+  if (long === short || long.startsWith(short + ' ')) {
+    const words = short.split(' ').filter(Boolean).length;
+    if (words >= 2 || short.length >= 10) return 0.92;
+    return 0.6; // a single short word ("Halls") is too weak to trust on its own
+  }
+  const ax = new Set(x.split(' ').filter(Boolean));
+  const by = new Set(y.split(' ').filter(Boolean));
+  const inter = [...ax].filter((t) => by.has(t)).length;
+  const union = new Set([...ax, ...by]).size;
+  return union ? inter / union : 0;
+}
+
+// Best candidate by title alone, preferring a full game over bundles and the cheapest edition.
+// Returns null unless the best is confident enough to accept without a model.
+export function pickByTitle(name, cands, minScore = 0.9) {
+  let best = null, bestScore = 0;
+  for (const c of cands) {
+    const sc = titleSimilarity(name, c.ProductName);
+    const isFull = String(c.StoreClass || '').toUpperCase() === 'FULL_GAME';
+    // tie-break toward full games and cheaper editions
+    const adjusted = sc + (isFull ? 0.001 : 0) - (Number(c.BasePrice) || 0) / 1e12;
+    if (sc >= minScore && adjusted > bestScore) { best = c; bestScore = adjusted; }
+  }
+  return best;
 }
 
 // One game, live, showing every step of the match decision. Backs the Queue diagnostic.
@@ -214,6 +240,27 @@ export async function matchDebug(env, appid) {
     } catch (e) { out.model_error = String(e.message || e); }
   }
   return out;
+}
+
+
+// Add a game by Steam appid or store URL, bypassing tag discovery. Tag-based discovery misses games whose
+// Bullet Heaven tag has not caught on yet (Entropy Survivors, for one), so there has to be a manual door.
+export function parseAppid(input) {
+  const str = String(input || '').trim();
+  const m = str.match(/store\.steampowered\.com\/app\/(\d+)/i) || str.match(/^(\d{3,9})$/);
+  return m ? Number(m[1]) : null;
+}
+
+export async function addGame(env, input) {
+  const appid = parseAppid(input);
+  if (!appid) return { ok: false, error: 'Give a Steam appid or a store.steampowered.com/app/... URL' };
+  const existing = await env.DB.prepare('SELECT appid, name, status FROM games WHERE appid = ?').bind(appid).first();
+  if (existing) return { ok: true, appid, name: existing.name, already: true, note: `Already tracked (${existing.status})` };
+  let name = `app ${appid}`;
+  try { const d = await steam.appDetails(appid); if (d && d.name) name = d.name; if (d && d.type && d.type !== 'game') return { ok: false, error: `Steam says that appid is a ${d.type}, not a game` }; }
+  catch (e) { return { ok: false, error: `Could not read that appid from Steam: ${String(e.message || e).slice(0, 140)}` }; }
+  await env.DB.prepare(`INSERT INTO games (appid, name, source, first_seen) VALUES (?, ?, 'manual', ?) ON CONFLICT(appid) DO NOTHING`).bind(appid, name, now()).run();
+  return { ok: true, appid, name, already: false, note: 'Added. The Runner will enrich, score, and match it.' };
 }
 
 // 3. Match: find the PSN listing for enriched, unmatched games. Gated by score so PlatPrices' limited monthly
@@ -269,6 +316,9 @@ export async function match(env, opts = {}) {
           await acceptMatch(env, g.appid, chosen);
         } else if (chosen && conf >= 0.5 && mode !== 'auto') {
           await env.DB.prepare(`UPDATE games SET psn_status = 'review', next_match_at = NULL WHERE appid = ?`).bind(g.appid).run();
+        } else if (modelFailed && pickByTitle(g.name, cands, 0.6)) {
+          // Model unusable, but the titles line up well enough to accept rather than lose a real listing.
+          await acceptMatch(env, g.appid, pickByTitle(g.name, cands, 0.6));
         } else if (modelFailed) {
           // Retry sooner and say why, rather than declaring the game absent on the strength of a parse failure.
           failed++;
@@ -330,6 +380,33 @@ export async function refresh(env, opts = {}) {
       }
     }
     return { count: updated, note: `${changed} price changes, ${calls} requests` };
+  });
+}
+
+// 4b. Deals: one list request returns a page of everything discounted in the region, instead of one request per
+// game. Used to spot sales on tracked games cheaply, and to notice that an unmatched game exists on the store.
+export async function deals(env, opts = {}) {
+  return withRun(env.DB, 'deals', async () => {
+    const maxPages = Math.max(1, Math.min(20, Number(opts.pages) || (isPaid(env) ? 8 : 4)));
+    if (!(await canSpend(env.DB, maxPages))) return { count: 0, note: `needs ${maxPages} requests, budget reserve reached` };
+    const known = new Map((await env.DB.prepare(`SELECT ppid, appid FROM psn_products WHERE ppid IS NOT NULL`).all()).results.map((r) => [Number(r.ppid), r.appid]));
+    let updated = 0, changed = 0, seen = 0, unknown = 0;
+    const t = now();
+    for (let page = 1; page <= maxPages; page++) {
+      const { rows, hasMore } = await pp.recentDeals(env, page);
+      seen += rows.length;
+      for (const g of rows) {
+        const ppid = Number(g.PPID);
+        if (!ppid) continue;
+        const appid = known.get(ppid);
+        if (appid) {
+          if (await pp.upsertProduct(env.DB, pp.toProductRow(g, appid), t)) changed++;
+          updated++;
+        } else unknown++;
+      }
+      if (!rows.length || !hasMore) break;
+    }
+    return { count: updated, note: `${seen} discounted products seen, ${changed} price changes on tracked games, ${unknown} not in the catalogue` };
   });
 }
 
@@ -410,7 +487,7 @@ export const planMethod = (env) => (env.ANTHROPIC_API_KEY && String(env.PLANS_WE
 export async function worthThreshold(env) {
   const s = await getSetting(env.DB, 'taste', {});
   const t = Number(s.match_min_score);
-  return Number.isFinite(t) ? t : 70;
+  return Number.isFinite(t) ? t : 55;
 }
 const webMinReviews = (env) => Number(env.PLANS_WEB_MIN_REVIEWS) || 50;
 const webWorthSql = (threshold, env) => ` AND COALESCE(f.score, -1) >= ${threshold} AND COALESCE(g.steam_pos,0)+COALESCE(g.steam_neg,0) >= ${webMinReviews(env)}`;
@@ -578,4 +655,4 @@ export async function rescore(env) {
   });
 }
 
-export const STAGES = { discover, enrich, match, refresh, tag, plans, rescore, retag, rematch, replan, 'retry-errors': retryErrors };
+export const STAGES = { discover, enrich, match, refresh, deals, tag, plans, rescore, retag, rematch, replan, 'retry-errors': retryErrors };

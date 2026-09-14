@@ -93,3 +93,19 @@ export async function upsertProduct(db, row, observedAt) {
 export async function markDelisted(db, ppids, observedAt) {
   for (const ppid of ppids) await db.prepare('UPDATE psn_products SET is_delisted = 1, is_on_sale = 0, refreshed_at = ? WHERE ppid = ?').bind(observedAt, ppid).run();
 }
+
+// Cheap list endpoints. One request returns a whole page of discounted products, versus one request per game.
+// Shapes are read defensively: the response has been observed as {data:[...]} and as {discounts:[...]}.
+export function unwrapList(j) {
+  if (!j || typeof j !== 'object') return [];
+  for (const k of ['data', 'discounts', 'games', 'results']) if (Array.isArray(j[k])) return j[k];
+  return Array.isArray(j) ? j : [];
+}
+
+// Everything discounted recently in the configured region.
+export async function recentDeals(env, page = 1) {
+  const j = await call(env, '/deals', { fields: GAME_FIELDS, page });
+  const rows = unwrapList(j);
+  const meta = j.meta || {};
+  return { rows, hasMore: Boolean(meta.has_more ?? (rows.length >= 25 && meta.page != null)), page };
+}
