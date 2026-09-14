@@ -97,8 +97,9 @@ export default function Queue({ meta, onChange }) {
               <div className="progress-text">
                 <span>{Math.round((runner.progress || 0) * 100)}%{runner.start_total ? `, ${runner.done} of ${runner.start_total} items` : ''}{runner.eta_seconds != null && runner.running ? `, ${fmtEta(runner.eta_seconds)} left` : ''}</span>
                 <span className="muted">
-                  {[['discover', 'pages'], ['enrich', 'to enrich'], ['match', 'to match'], ['tag', 'to tag'], ['plans', 'plans to read']].filter(([k]) => runner.pending_counts[k] > 0).map(([k, label]) => `${runner.pending_counts[k]} ${label}`).join(', ') || 'nothing left'}
+                  {[['discover', 'pages'], ['enrich', 'to enrich'], ['tag', 'to tag'], ['match', 'to match'], ['plans', 'plans to read']].filter(([k]) => runner.pending_counts[k] > 0).map(([k, label]) => `${runner.pending_counts[k]} ${label}`).join(', ') || 'nothing left'}
                   {runner.pending_counts.tag_blocked || runner.pending_counts.plans_blocked ? ` (${runner.pending_counts.tag_blocked + runner.pending_counts.plans_blocked} waiting on the AI allocation)` : ''}
+                  {runner.pending_counts.waiting_on_score ? ` (${runner.pending_counts.waiting_on_score} not yet scored, so not eligible to match yet)` : ''}
                 </span>
               </div>
             </div>

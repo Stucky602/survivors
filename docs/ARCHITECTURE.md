@@ -1,6 +1,6 @@
 # Survivors-like PSN tracker: architecture v0.1
 
-Status: v0.10 built Sep 11 2026. Sections 1 to 6 describe what is in the repo; sections 9 to 11 list what v0.2 to v0.4 added.
+Status: v0.11 built Sep 11 2026. Sections 1 to 6 describe what is in the repo; sections 9 to 11 list what v0.2 to v0.4 added.
 Decisions already made in chat: public site, one real user, $0/month, hybrid tagging (AI first pass, Kevin confirms high scorers), hub is both a filter and a weight.
 
 ## 1. What the site does
@@ -337,3 +337,12 @@ The web-search read cost $0.05 to $0.08 a game, not the "few cents" claimed in 1
 ## 17. v0.10: hardening (Sep 11)
 
 PlatPrices' reviewer looked at the site before issuing a key and saw internals exposed: the public `/api/meta` returned run logs with error text, the PlatPrices quota counters, the AI model in use, and whether the key was set. Nothing secret, but the wrong picture. Changes: `/api/meta` is now catalog-only; everything operational moved to `/api/admin/meta`. Game detail returns error text and proposed facets only to an authenticated admin. Queue and Settings are unlinked and inert for anonymous visitors, and the client only shows admin state after the Worker has accepted the token. A configured `ADMIN_TOKEN` under 24 characters is refused. Security headers on every response and a CSP on the assets (`public/_headers`), `robots.txt` disallows `/api/`. The full model is in `docs/SECURITY.md`, which is also the answer sent to PlatPrices.
+
+
+## 18. v0.11: worth bothering with (Sep 11)
+
+Kevin's ask, right after adding the PlatPrices key: don't spend the limited monthly quota, or Claude spend, on games below a score, with a live toggle rather than a variable requiring a push.
+
+This works because tagging never depended on a PSN match; a game's taste score comes from Steam data alone. So the pipeline priority changed to score first, spend second: Discover, Enrich, **Tag**, then **Match** (which now requires `facets.score >= match_min_score`, default 70, or the game is marked "want"), then the paid web plan-search (same threshold, reused rather than a second number to keep in sync). A game below the bar simply waits: once tagged, if it clears the bar later it becomes eligible the next batch.
+
+The threshold lives in `taste.match_min_score` in D1, not an environment variable, so it can be changed from Settings and takes effect on the very next batch, no redeploy. Three quick buttons (70, 60, no minimum) plus a number field. Queue shows how many already-scored games are sitting below the current line, and the progress line notes how many are waiting to be scored before they're even eligible. Existing matches are never undone by raising the threshold; the gate only affects new matches going forward. Wrangler's now-unused `PLANS_WEB_MIN_SCORE` variable was removed.

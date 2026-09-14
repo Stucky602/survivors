@@ -150,14 +150,19 @@ export function nameVariants(name) {
   return out.slice(0, 3);
 }
 
-// 3. Match: find the PSN listing for enriched, unmatched games.
+// 3. Match: find the PSN listing for enriched, unmatched games. Gated by score so PlatPrices' limited monthly
+// quota goes to games actually worth buying: below match_min_score, a game waits until it is tagged and clears
+// the bar, or until Kevin marks it "want" (which always bypasses the gate). Score 0 in Settings disables the gate.
 export async function match(env, opts = {}) {
   return withRun(env.DB, 'match', async () => {
     const limit = limitOf(env, opts.limit);
+    const threshold = await worthThreshold(env);
+    const gate = threshold > 0 ? ` AND (COALESCE(k.want,0) = 1 OR (f.score IS NOT NULL AND f.score >= ${threshold}))` : '';
     const { results } = await env.DB.prepare(
       `SELECT g.appid, g.name, g.developer, g.publisher, g.steam_release FROM games g
+       LEFT JOIN facets f ON f.appid = g.appid LEFT JOIN kevin k ON k.appid = g.appid
        WHERE g.status = 'enriched' AND g.psn_status IN ('unmatched','not_listed') AND g.ppid IS NULL
-         AND (g.next_match_at IS NULL OR g.next_match_at <= ?)${scopeSql(scopeOf(opts))}
+         AND (g.next_match_at IS NULL OR g.next_match_at <= ?)${gate}${scopeSql(scopeOf(opts), 'g')}
        ORDER BY g.psn_status = 'unmatched' DESC, g.first_seen LIMIT ?`
     ).bind(now(), limit).all();
     let n = 0, skipped = 0;
@@ -362,11 +367,12 @@ export async function plans(env, opts = {}) {
       }
     }
     if (planMethod(env) === 'web' && !over()) {
+      const threshold = await worthThreshold(env);
       const webLimit = Math.min(15, limit);
-      const worth = (await env.DB.prepare(
+      const worth = threshold > 0 ? (await env.DB.prepare(
         `SELECT g.appid, g.name, g.developer, g.publisher, g.steam_release FROM games g LEFT JOIN facets f ON f.appid = g.appid
-         WHERE g.status = 'enriched' AND g.ppid IS NULL AND g.ps5_plan_method = 'news' AND g.ps5_plan IN ('unknown','planned')${webWorthSql(env)}${sc}
-         ORDER BY f.score DESC LIMIT ?`).bind(webLimit).all()).results;
+         WHERE g.status = 'enriched' AND g.ppid IS NULL AND g.ps5_plan_method = 'news' AND g.ps5_plan IN ('unknown','planned')${webWorthSql(threshold, env)}${sc}
+         ORDER BY f.score DESC LIMIT ?`).bind(webLimit).all()).results : [];
       for (const g of worth) {
         if (over()) break;
         try {
@@ -395,8 +401,9 @@ export async function replan(env, opts = {}) {
     // Re-queues the FREE news read for games never read by it. Web reads are chosen automatically inside plans()
     // (score >= 60, 50+ reviews, news said unknown), so nothing here spends money.
     const r = await env.DB.prepare(`UPDATE games SET ps5_plan_at = NULL WHERE ppid IS NULL AND ps5_plan_at IS NOT NULL AND ps5_plan != 'announced_date' AND ps5_plan_method IS NULL`).run();
-    const worth = await env.DB.prepare(`SELECT COUNT(*) AS n FROM games g LEFT JOIN facets f ON f.appid = g.appid WHERE g.status = 'enriched' AND g.ppid IS NULL AND (g.ps5_plan_method IS NULL OR g.ps5_plan_method = 'news') AND COALESCE(g.ps5_plan,'unknown') IN ('unknown','planned')${webWorthSql(env)}`).first();
-    return { count: r.meta.changes, note: `${r.meta.changes} queued for the free news read; ${worth.n} would qualify for a web read at current thresholds` };
+    const threshold = await worthThreshold(env);
+    const worth = threshold > 0 ? await env.DB.prepare(`SELECT COUNT(*) AS n FROM games g LEFT JOIN facets f ON f.appid = g.appid WHERE g.status = 'enriched' AND g.ppid IS NULL AND (g.ps5_plan_method IS NULL OR g.ps5_plan_method = 'news') AND COALESCE(g.ps5_plan,'unknown') IN ('unknown','planned')${webWorthSql(threshold, env)}`).first() : { n: 0 };
+    return { count: r.meta.changes, note: `${r.meta.changes} queued for the free news read; ${worth.n} would qualify for a web read at the current minimum score (${threshold || 'off'})` };
   });
 }
 

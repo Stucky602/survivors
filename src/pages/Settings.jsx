@@ -102,6 +102,16 @@ export default function Settings({ meta, onChange }) {
           <textarea rows="3" value={s.extra_appids.join('\n')} onChange={(e) => setS({ ...s, extra_appids: e.target.value.split(/\s+/).filter(Boolean) })} />
           <div className="actions"><button className="primary" onClick={() => saveTaste(false)}>Save tags and appids</button></div>
 
+          <h2>Worth bothering with</h2>
+          <p className="muted">Below this score, a game is not matched to the PS Store (saves PlatPrices' monthly quota) and not given a paid web search for its PlayStation plans (saves Claude spend). A game you mark "want" always bypasses this. Takes effect immediately, no push needed.</p>
+          <div className="actions">
+            {[70, 60, 0].map((v) => (
+              <button key={v} className={(s.taste.match_min_score ?? 70) === v ? 'on' : ''} onClick={() => setS({ ...s, taste: { ...s.taste, match_min_score: v } })}>{v === 0 ? 'No minimum' : v}</button>
+            ))}
+            <input type="number" min="0" max="100" value={s.taste.match_min_score ?? 70} onChange={(e) => setS({ ...s, taste: { ...s.taste, match_min_score: Number(e.target.value) || 0 } })} />
+            <button className="primary" onClick={() => saveTaste(false)}>Save</button>
+          </div>
+
           <h2>Review mode</h2>
           <p className="muted">Automatic: the model's tags and PS Store matches stand, nothing waits on you. Hybrid: games scoring at or above the queue threshold, and matches between 50% and 90% confidence, park in Queue for a look first.</p>
           <div className="actions">

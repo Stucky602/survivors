@@ -136,7 +136,13 @@ async function handleApi(request, env, ctx) {
               (SELECT COUNT(*) FROM facets WHERE reviews_at_tag < 0 AND confirmed_by IS NULL) AS retag_pending
        FROM games`
     ).first();
-    return json({ counts, runs: await lastRuns(env.DB), budget: await readBudget(env.DB), has_platprices_key: !!env.PLATPRICES_KEY, plan: String(env.PLAN || 'free').toLowerCase(),
+    const taste = { ...DEFAULT_SETTINGS, ...(await getSetting(env.DB, 'taste', {})) };
+    const th = Number(taste.match_min_score) || 0;
+    counts.below_match_threshold = th > 0 ? (await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM games g LEFT JOIN facets f ON f.appid = g.appid LEFT JOIN kevin k ON k.appid = g.appid
+       WHERE g.status = 'enriched' AND g.psn_status IN ('unmatched','not_listed') AND g.ppid IS NULL AND COALESCE(k.want,0) = 0 AND f.score IS NOT NULL AND f.score < ${th}`
+    ).first()).n : 0;
+    return json({ counts, match_min_score: th, runs: await lastRuns(env.DB), budget: await readBudget(env.DB), has_platprices_key: !!env.PLATPRICES_KEY, plan: String(env.PLAN || 'free').toLowerCase(),
       plan_method: planMethod(env), tagger: env.ANTHROPIC_API_KEY ? (env.CLAUDE_MODEL || 'claude-haiku-4-5') : (env.AI_MODEL || 'workers-ai'), ai_capped_until: (await aiCapped(env)) ? await getSetting(env.DB, 'ai_capped_until', null) : null });
   }
 

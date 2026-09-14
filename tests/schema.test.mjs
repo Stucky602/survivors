@@ -12,6 +12,7 @@ assert.equal(weights.penalties.shallow_progression, DEFAULT_SETTINGS.penalties.s
 assert.equal(weights.gates.horde_min, DEFAULT_SETTINGS.gates.horde_min);
 assert.equal(weights.queue_threshold, DEFAULT_SETTINGS.queue_threshold);
 assert.equal(weights.wildcard_max_reviews, DEFAULT_SETTINGS.wildcard_max_reviews);
+assert.equal(weights.match_min_score, DEFAULT_SETTINGS.match_min_score);
 
 const weightedKeys = Object.keys(facets.weighted).sort();
 assert.deepEqual(weightedKeys, Object.keys(DEFAULT_WEIGHTS).sort(), 'facets.json weighted keys differ from DEFAULT_WEIGHTS');

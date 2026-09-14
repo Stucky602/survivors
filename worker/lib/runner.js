@@ -1,7 +1,7 @@
 // The Runner: a Durable Object that drains the pipeline one batch per alarm.
 // Each alarm is its own Worker invocation with its own 50-subrequest budget, which is the only way
 // to backfill several hundred games on the free plan without a human clicking a button per batch.
-import { STAGES, aiCapped, isPaid, scopeSql, SCOPES, planMethod } from './stages.js';
+import { STAGES, aiCapped, isPaid, scopeSql, SCOPES, planMethod, worthThreshold } from './stages.js';
 import { claudeOverBudget } from './ai.js';
 import { getSetting, daysFromNow, now } from './db.js';
 
@@ -101,15 +101,25 @@ export async function pendingCounts(env, scope = 'all') {
   const tags = await getSetting(db, 'steam_tags', []);
   const discover = cursor.tag > 0 || cursor.page > 0 ? Math.max(1, (tags.length - cursor.tag) * 14 - cursor.page) : 0; // ~14 pages per tag, rough
   const enrich = (await db.prepare(`SELECT COUNT(*) AS n FROM games g LEFT JOIN steam_cache c ON c.appid = g.appid WHERE g.status = 'new' OR (g.status = 'error' AND COALESCE(g.error_count,0) < 5 AND (g.last_enriched IS NULL OR g.last_enriched < ?)) OR (g.status = 'enriched' AND c.news_json IS NULL${sc})`).bind(daysFromNow(-1 / 24)).first()).n;
-  const match = env.PLATPRICES_KEY ? (await db.prepare(`SELECT COUNT(*) AS n FROM games g WHERE g.status = 'enriched' AND g.psn_status IN ('unmatched','not_listed') AND g.ppid IS NULL AND (g.next_match_at IS NULL OR g.next_match_at <= ?)${sc}`).bind(now()).first()).n : 0;
+  const matchThreshold = await worthThreshold(env);
+  const matchGate = matchThreshold > 0 ? ` AND (COALESCE(k.want,0) = 1 OR (f.score IS NOT NULL AND f.score >= ${matchThreshold}))` : '';
+  const match = env.PLATPRICES_KEY ? (await db.prepare(
+    `SELECT COUNT(*) AS n FROM games g LEFT JOIN facets f ON f.appid = g.appid LEFT JOIN kevin k ON k.appid = g.appid
+     WHERE g.status = 'enriched' AND g.psn_status IN ('unmatched','not_listed') AND g.ppid IS NULL AND (g.next_match_at IS NULL OR g.next_match_at <= ?)${matchGate}${sc}`
+  ).bind(now()).first()).n : 0;
+  // Games waiting on a score before they are even eligible for the match gate: informational, not part of `total`.
+  const waitingOnScore = (matchThreshold > 0 && env.PLATPRICES_KEY)
+    ? (await db.prepare(`SELECT COUNT(*) AS n FROM games g LEFT JOIN facets f ON f.appid = g.appid LEFT JOIN kevin k ON k.appid = g.appid
+        WHERE g.status = 'enriched' AND g.psn_status IN ('unmatched','not_listed') AND g.ppid IS NULL AND (g.next_match_at IS NULL OR g.next_match_at <= ?)
+          AND COALESCE(k.want,0) = 0 AND f.appid IS NULL${sc}`).bind(now()).first()).n : 0;
   const tag = (await db.prepare(`SELECT COUNT(*) AS n FROM games g LEFT JOIN facets f ON f.appid = g.appid JOIN steam_cache c ON c.appid = g.appid WHERE g.status = 'enriched' AND c.appdetails_json IS NOT NULL AND (f.appid IS NULL OR (f.confirmed_by IS NULL AND COALESCE(g.steam_pos,0)+COALESCE(g.steam_neg,0) >= 2 * COALESCE(f.reviews_at_tag, 0) + 20))${sc}`).first()).n;
   let plans = (await db.prepare(`SELECT COUNT(*) AS n FROM games g JOIN steam_cache c ON c.appid = g.appid WHERE g.status = 'enriched' AND g.ppid IS NULL AND c.news_json IS NOT NULL AND g.ps5_plan_at IS NULL AND (g.last_error IS NULL OR g.last_error NOT LIKE 'plans: %')${sc}`).first()).n;
-  if (planMethod(env) === 'web' && !(await claudeOverBudget(env))) {
-    const minScore = Number(env.PLANS_WEB_MIN_SCORE) || 70, minRev = Number(env.PLANS_WEB_MIN_REVIEWS) || 50;
-    plans += (await db.prepare(`SELECT COUNT(*) AS n FROM games g LEFT JOIN facets f ON f.appid = g.appid WHERE g.status = 'enriched' AND g.ppid IS NULL AND g.ps5_plan_method = 'news' AND g.ps5_plan IN ('unknown','planned') AND COALESCE(f.score,-1) >= ${minScore} AND COALESCE(g.steam_pos,0)+COALESCE(g.steam_neg,0) >= ${minRev}${sc}`).first()).n;
+  if (planMethod(env) === 'web' && matchThreshold > 0 && !(await claudeOverBudget(env))) {
+    const minRev = Number(env.PLANS_WEB_MIN_REVIEWS) || 50;
+    plans += (await db.prepare(`SELECT COUNT(*) AS n FROM games g LEFT JOIN facets f ON f.appid = g.appid WHERE g.status = 'enriched' AND g.ppid IS NULL AND g.ps5_plan_method = 'news' AND g.ps5_plan IN ('unknown','planned') AND COALESCE(f.score,-1) >= ${matchThreshold} AND COALESCE(g.steam_pos,0)+COALESCE(g.steam_neg,0) >= ${minRev}${sc}`).first()).n;
   }
   const capped = await aiCapped(env);
-  return { discover, enrich, match, tag: capped ? 0 : tag, plans: capped ? 0 : plans, tag_blocked: capped ? tag : 0, plans_blocked: capped ? plans : 0, total: discover + enrich + match + (capped ? 0 : tag + plans) };
+  return { discover, enrich, match, tag: capped ? 0 : tag, plans: capped ? 0 : plans, tag_blocked: capped ? tag : 0, plans_blocked: capped ? plans : 0, waiting_on_score: waitingOnScore, total: discover + enrich + (capped ? 0 : tag) + match + (capped ? 0 : plans) };
 }
 
 // Which stage has work, in pipeline order. Returns null when everything is drained.
