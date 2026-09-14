@@ -2,6 +2,7 @@
 import { now, daysFromNow, getSetting, setSetting, startRun, endRun, upsertGameFromSteamSearch, canSpend } from './db.js';
 import * as steam from './steam.js';
 import * as pp from './platprices.js';
+import { syncBudgetFromStatus } from './db.js';
 import { runJSON, runClaude, isCapError } from './ai.js';
 import { MATCH_SYSTEM, matchUser, TAG_SYSTEM, tagUser, PLAN_SYSTEM, planUser, PLAN_WEB_SYSTEM, planWebUser } from './prompts.js';
 import { computeQuality, scoreGame, categorize, needsReview, normalizeFacets, normalizeEvidence, DEFAULT_SETTINGS } from '../../shared/score.js';
@@ -69,8 +70,19 @@ export async function discover(env, opts = {}) {
     // Extra appids only need doing once, when we've finished a full sweep.
     if (done) for (const appid of extra) if (await upsertGameFromSteamSearch(env.DB, { appid: Number(appid), name: `app ${appid}`, source: 'manual' })) added++;
     if (tags.length && seen === 0 && !done) throw new Error('Steam search returned no items; the search HTML may have changed');
+    await syncBudgetDaily(env); // free correctness check: confirms the local PlatPrices tracker against their real numbers once a day
     return { count: added, note: done ? `swept all tags, seen ${seen} this pass` : `seen ${seen}, more pages queued (tag ${ti}, page ${pg})` };
   });
+}
+
+// Once-a-day reconciliation against PlatPrices' own /status, so a wrong or missing rate-limit header can never
+// silently wedge match/refresh again. Only calls out if it hasn't already run today; failures are swallowed.
+export async function syncBudgetDaily(env) {
+  if (!env.PLATPRICES_KEY) return;
+  const last = await getSetting(env.DB, 'budget_synced_on', null);
+  const today = now().slice(0, 10);
+  if (last === today) return;
+  try { await syncBudgetFromStatus(env.DB, await pp.status(env)); await setSetting(env.DB, 'budget_synced_on', today); } catch { /* try again next tick */ }
 }
 
 // 2. Enrich: appdetails + reviews + tag votes for new games, and games not enriched in 7 days.

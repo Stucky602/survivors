@@ -3,7 +3,7 @@ import { STAGES, acceptMatch, aiCapped, planDebug, planMethod } from './lib/stag
 import { Runner, pickStage } from './lib/runner.js';
 import { claudeSpend } from './lib/ai.js';
 export { Runner };
-import { getSetting, setSetting, lastRuns, readBudget, now } from './lib/db.js';
+import { getSetting, setSetting, lastRuns, readBudget, syncBudgetFromStatus, now } from './lib/db.js';
 import { isAdmin } from './lib/auth.js';
 import * as steam from './lib/steam.js';
 import { status as ppStatus, batch as ppBatch } from './lib/platprices.js';
@@ -273,10 +273,10 @@ async function handleApi(request, env, ctx) {
   }
 
   if (m === 'GET' && path === '/admin/budget') {
+    let remote = null, synced = false;
+    try { remote = await ppStatus(env); synced = await syncBudgetFromStatus(env.DB, remote); } catch (e) { remote = { error: e.message }; }
     const local = await readBudget(env.DB);
-    let remote = null;
-    try { remote = await ppStatus(env); } catch (e) { remote = { error: e.message }; }
-    return json({ local, remote });
+    return json({ local, remote, synced });
   }
 
   return bad('no such route', 404);

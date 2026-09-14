@@ -1,7 +1,7 @@
 // The Runner: a Durable Object that drains the pipeline one batch per alarm.
 // Each alarm is its own Worker invocation with its own 50-subrequest budget, which is the only way
 // to backfill several hundred games on the free plan without a human clicking a button per batch.
-import { STAGES, aiCapped, isPaid, scopeSql, SCOPES, planMethod, worthThreshold } from './stages.js';
+import { STAGES, aiCapped, isPaid, scopeSql, SCOPES, planMethod, worthThreshold, syncBudgetDaily } from './stages.js';
 import { claudeOverBudget } from './ai.js';
 import { getSetting, daysFromNow, now } from './db.js';
 

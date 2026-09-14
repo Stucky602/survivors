@@ -1,6 +1,6 @@
 # Survivors-like PSN tracker: architecture v0.1
 
-Status: v0.11 built Sep 11 2026. Sections 1 to 6 describe what is in the repo; sections 9 to 11 list what v0.2 to v0.4 added.
+Status: v0.11.2 built Sep 14 2026. Sections 1 to 6 describe what is in the repo; sections 9 to 11 list what v0.2 to v0.4 added.
 Decisions already made in chat: public site, one real user, $0/month, hybrid tagging (AI first pass, Kevin confirms high scorers), hub is both a filter and a weight.
 
 ## 1. What the site does
@@ -346,3 +346,10 @@ Kevin's ask, right after adding the PlatPrices key: don't spend the limited mont
 This works because tagging never depended on a PSN match; a game's taste score comes from Steam data alone. So the pipeline priority changed to score first, spend second: Discover, Enrich, **Tag**, then **Match** (which now requires `facets.score >= match_min_score`, default 70, or the game is marked "want"), then the paid web plan-search (same threshold, reused rather than a second number to keep in sync). A game below the bar simply waits: once tagged, if it clears the bar later it becomes eligible the next batch.
 
 The threshold lives in `taste.match_min_score` in D1, not an environment variable, so it can be changed from Settings and takes effect on the very next batch, no redeploy. Three quick buttons (70, 60, no minimum) plus a number field. Queue shows how many already-scored games are sitting below the current line, and the progress line notes how many are waiting to be scored before they're even eligible. Existing matches are never undone by raising the threshold; the gate only affects new matches going forward. Wrangler's now-unused `PLANS_WEB_MIN_SCORE` variable was removed.
+
+
+## 19. v0.11.2: the phantom budget lock (Sep 14)
+
+Match was skipping every game with "budget reserve" while PlatPrices' own `/status` showed 1,000 of 1,000 requests untouched. Cause: `noteBudgetHeaders()` read `headers.get('X-RateLimit-Remaining')`, which returns `null` for a header that isn't present -- and `Number(null)` is `0`, not `NaN`, so a header PlatPrices likely never sends (the exact name was guessed, never verified against a real response) was silently recorded as "zero requests remaining," permanently. `canSpend()` was working correctly the whole time; it was trusting a manufactured lie.
+
+Fixed two ways. `noteBudgetHeaders()` now checks for the header's presence before touching it, so a missing header is ignored rather than treated as zero. And because a guessed header name could always be wrong again, the tracker no longer depends on it alone: `syncBudgetFromStatus()` writes PlatPrices' authoritative `/status` numbers straight into the same tracked row, called both from the admin "Check live" button (which now corrects the stuck tracker on the spot instead of only displaying it) and once a day automatically, piggybacked on the existing daily discover run. A future header problem can wedge things for at most a day, never permanently.

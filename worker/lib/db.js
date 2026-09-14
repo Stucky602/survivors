@@ -53,14 +53,37 @@ export async function readBudget(db) {
   return row;
 }
 
+// PlatPrices' rate-limit headers, if they send them, keep the local tracker current between full status checks.
+// headers.get() returns null for a missing header, and Number(null) is 0 (not NaN) -- a real bug that made a
+// MISSING header look identical to "zero remaining" and permanently blocked spending. Guard against that explicitly.
 export async function noteBudgetHeaders(db, headers) {
-  const used = Number(headers.get('X-RateLimit-Used'));
-  const remaining = Number(headers.get('X-RateLimit-Remaining'));
+  const usedRaw = headers.get('X-RateLimit-Used');
+  const remainingRaw = headers.get('X-RateLimit-Remaining');
+  if (remainingRaw == null) return; // header not present -- do not invent a number
+  const used = Number(usedRaw);
+  const remaining = Number(remainingRaw);
   if (!Number.isFinite(remaining)) return;
   await db.prepare(
     `INSERT INTO api_budget (month, used, remaining, reserve, last_header_at) VALUES (?, ?, ?, 150, ?)
      ON CONFLICT(month) DO UPDATE SET used = excluded.used, remaining = excluded.remaining, last_header_at = excluded.last_header_at`
   ).bind(monthKey(), Number.isFinite(used) ? used : 0, remaining, now()).run();
+}
+
+// PlatPrices' own /status endpoint is authoritative and does not depend on guessing header names. Call it to
+// correct the local tracker -- used from the admin budget check (so pressing it fixes a stuck tracker on the
+// spot) and once a day from cron, so a future header-format change cannot silently wedge match/refresh again.
+export async function syncBudgetFromStatus(db, remoteStatus) {
+  const used = Number(remoteStatus && remoteStatus.used_this_month);
+  const limit = Number(remoteStatus && remoteStatus.monthly_limit);
+  const remaining = Number.isFinite(remoteStatus && remoteStatus.remaining_this_month)
+    ? Number(remoteStatus.remaining_this_month)
+    : (Number.isFinite(used) && Number.isFinite(limit) ? limit - used : null);
+  if (!Number.isFinite(remaining)) return false;
+  await db.prepare(
+    `INSERT INTO api_budget (month, used, remaining, reserve, last_header_at) VALUES (?, ?, ?, 150, ?)
+     ON CONFLICT(month) DO UPDATE SET used = excluded.used, remaining = excluded.remaining, last_header_at = excluded.last_header_at`
+  ).bind(monthKey(), Number.isFinite(used) ? used : 0, remaining, now()).run();
+  return true;
 }
 
 // Can we spend `n` more requests without eating the reserve? Unknown remaining (fresh month) = yes.

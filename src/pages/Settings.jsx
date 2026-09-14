@@ -141,7 +141,7 @@ export default function Settings({ meta, onChange }) {
           <h2>PlatPrices budget</h2>
           <p className="muted">Free plan: 1,000 requests a month. The worker keeps 150 in reserve and stops refreshing prices when it would dip below that.</p>
           {meta && meta.budget && <p>Seen from headers: used {meta.budget.used}, remaining {meta.budget.remaining ?? 'unknown'}, reserve {meta.budget.reserve}. Month {meta.budget.month}.</p>}
-          <div className="actions"><button onClick={checkBudget}>Check live (costs nothing)</button></div>
+          <div className="actions"><button onClick={checkBudget}>Check live and fix the tracker</button></div>
           {budget && <pre className="log">{JSON.stringify(budget.remote, null, 2)}</pre>}
         </>
       )}
