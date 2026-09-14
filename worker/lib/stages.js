@@ -308,11 +308,17 @@ export async function tag(env, opts = {}) {
 // (PLANS_WEB_SEARCH=1 and ANTHROPIC_API_KEY set), which is what actually finds announcements that never hit Steam news.
 export const PLAN_STATUSES = ['announced_date', 'announced_window', 'announced', 'planned', 'not_planned', 'unknown', 'listed'];
 export const planMethod = (env) => (env.ANTHROPIC_API_KEY && String(env.PLANS_WEB_SEARCH || '') === '1' ? 'web' : 'news');
-// Web search costs real money per game, so it is reserved for games worth a port: scored at least PLANS_WEB_MIN_SCORE (60)
-// with at least PLANS_WEB_MIN_REVIEWS (50) Steam reviews. Everything else uses the free news method.
-const webMinScore = (env) => Number(env.PLANS_WEB_MIN_SCORE) || 70;
+// Web search costs real money per game, so it is reserved for games worth a port: scored at least the shared
+// worthThreshold (default 70) with at least PLANS_WEB_MIN_REVIEWS (50) Steam reviews. Everything else uses the free news method.
+// The one live, no-redeploy-needed "is this worth spending on" threshold. Lives in the taste settings blob
+// (Settings page), not an env var, so Kevin can flip it from 70 to 60 to 0 without pushing code.
+export async function worthThreshold(env) {
+  const s = await getSetting(env.DB, 'taste', {});
+  const t = Number(s.match_min_score);
+  return Number.isFinite(t) ? t : 70;
+}
 const webMinReviews = (env) => Number(env.PLANS_WEB_MIN_REVIEWS) || 50;
-const webWorthSql = (env) => ` AND COALESCE(f.score, -1) >= ${webMinScore(env)} AND COALESCE(g.steam_pos,0)+COALESCE(g.steam_neg,0) >= ${webMinReviews(env)}`;
+const webWorthSql = (threshold, env) => ` AND COALESCE(f.score, -1) >= ${threshold} AND COALESCE(g.steam_pos,0)+COALESCE(g.steam_neg,0) >= ${webMinReviews(env)}`;
 
 // Normalise whatever the model returned. Accepts status/ps5_status, any case, stray spaces.
 export function parsePlan(j) {
