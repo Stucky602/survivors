@@ -23,7 +23,7 @@ export default function Settings({ meta, onChange }) {
   const saveTaste = async (rescore) => {
     setMsg('');
     try {
-      await api('/admin/settings', { method: 'PUT', admin: true, body: { taste: s.taste, steam_tags: s.steam_tags, extra_appids: s.extra_appids, review_mode: s.review_mode || 'auto' } });
+      await api('/admin/settings', { method: 'PUT', admin: true, body: { taste: s.taste, steam_tags: s.steam_tags, extra_appids: s.extra_appids, review_mode: s.review_mode || 'auto', psn_region: s.psn_region || '' } });
       setLocalTaste(null);
       if (rescore) { const r = await api('/admin/run/rescore', { method: 'POST', admin: true, body: {} }); setMsg(`Saved. Rescored ${r.count} games.`); } else setMsg('Saved.');
       onChange && onChange();
@@ -137,6 +137,14 @@ export default function Settings({ meta, onChange }) {
               </table>
             </>
           ))}
+
+          <h2>PlatPrices region</h2>
+          <p className="muted">Sent with every PlatPrices request. It must be one of the regions your key allows; "Check live" below prints the allowed list. Change takes effect immediately, no push needed.</p>
+          <div className="actions">
+            <input type="text" placeholder={s.region_default || 'US'} value={s.psn_region || ''} onChange={(e) => setS({ ...s, psn_region: e.target.value })} />
+            <button className="primary" onClick={() => saveTaste(false)}>Save region</button>
+            <span className="muted">Currently sending: <b>{s.psn_region || s.region_default || 'US'}</b></span>
+          </div>
 
           <h2>PlatPrices budget</h2>
           <p className="muted">Free plan: 1,000 requests a month. The worker keeps 150 in reserve and stops refreshing prices when it would dip below that.</p>

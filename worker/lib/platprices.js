@@ -1,5 +1,5 @@
 // PlatPrices API v2. Every call spends one request from a 1,000/month Free quota, so callers check canSpend() first.
-import { noteBudgetHeaders } from './db.js';
+import { noteBudgetHeaders, getSetting } from './db.js';
 
 const BASE = 'https://platprices.com/api/v2';
 
@@ -15,7 +15,12 @@ export const GAME_FIELDS = [
 async function call(env, path, params = {}) {
   if (!env.PLATPRICES_KEY) throw new Error('PLATPRICES_KEY secret is not set');
   const url = new URL(BASE + path);
-  url.searchParams.set('region', (env.REGION || 'US').toLowerCase());
+  // Region is settable from the Settings page (D1) so it can be corrected without a redeploy; falls back to the
+  // REGION variable. Sent as-is when it isn't a plain two-letter code, since the key's allowed_regions list is
+  // authoritative and not always a lowercase country code.
+  const override = await getSetting(env.DB, 'psn_region', null);
+  const region = String(override || env.REGION || 'US');
+  url.searchParams.set('region', /^[A-Za-z]{2}$/.test(region) ? region.toLowerCase() : region);
   for (const [k, v] of Object.entries(params)) if (v != null) url.searchParams.set(k, String(v));
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort('timeout'), 15000);

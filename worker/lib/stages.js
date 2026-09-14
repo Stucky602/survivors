@@ -177,10 +177,13 @@ export async function match(env, opts = {}) {
          AND (g.next_match_at IS NULL OR g.next_match_at <= ?)${gate}${scopeSql(scopeOf(opts), 'g')}
        ORDER BY g.psn_status = 'unmatched' DESC, g.first_seen LIMIT ?`
     ).bind(now(), limit).all();
-    let n = 0, skipped = 0;
+    let n = 0, skipped = 0, failed = 0, firstError = null;
     const over = budgetClock(env);
     for (const g of results) {
       if (over()) break;
+      // Systemic failure guard: if the first few all fail the same way (bad key, wrong region, API down),
+      // stop the batch instead of burning through the queue marking every game with the same error.
+      if (failed >= 3 && n === 0) break;
       if (!(await canSpend(env.DB, 1))) { skipped++; continue; }
       try {
         let cands = [];
@@ -210,10 +213,23 @@ export async function match(env, opts = {}) {
         }
         n++;
       } catch (e) {
-        await env.DB.prepare(`UPDATE games SET last_error = ?, next_match_at = ? WHERE appid = ?`).bind(String(e.message || e).slice(0, 300), daysFromNow(1), g.appid).run();
+        failed++;
+        const msg = String(e.message || e);
+        if (!firstError) firstError = msg;
+        // Only defer a game if the batch is otherwise healthy. On a systemic failure, leave next_match_at alone
+        // so the whole queue is retried immediately once the underlying problem is fixed.
+        const systemic = failed >= 3 && n === 0;
+        await env.DB.prepare(
+          systemic
+            ? `UPDATE games SET last_error = ? WHERE appid = ?`
+            : `UPDATE games SET last_error = ?, next_match_at = ? WHERE appid = ?`
+        ).bind(...(systemic ? [msg.slice(0, 300), g.appid] : [msg.slice(0, 300), daysFromNow(1), g.appid])).run();
       }
     }
-    return { count: n, note: skipped ? `${skipped} skipped, budget reserve` : null };
+    const bits = [];
+    if (failed) bits.push(`${failed} failed: ${String(firstError).slice(0, 160)}`);
+    if (skipped) bits.push(`${skipped} skipped, budget reserve`);
+    return { count: n, note: bits.join('; ') || null };
   });
 }
 
@@ -451,7 +467,7 @@ export async function retag(env) {
 // By default only titles the smarter search can help with (a subtitle or an edition word); `all: true` does every not-listed game.
 export async function rematch(env, opts = {}) {
   return withRun(env.DB, 'rematch', async () => {
-    const { results } = await env.DB.prepare(`SELECT appid, name FROM games WHERE psn_status = 'not_listed' AND ppid IS NULL`).all();
+    const { results } = await env.DB.prepare(`SELECT appid, name FROM games WHERE psn_status IN ('not_listed','unmatched') AND ppid IS NULL`).all();
     const targets = results.filter((g) => opts.all || nameVariants(g.name).length > 1);
     for (const g of targets) await env.DB.prepare(`UPDATE games SET next_match_at = NULL WHERE appid = ? AND ppid IS NULL`).bind(g.appid).run();
     await setSetting(env.DB, 'rematch_done_v1', true);
@@ -464,9 +480,12 @@ export async function retryErrors(env) {
   return withRun(env.DB, 'retry-errors', async () => {
     const a = await env.DB.prepare(`UPDATE games SET status = 'new', error_count = 0, last_error = NULL, last_enriched = NULL WHERE status = 'error'`).run();
     const b = await env.DB.prepare(`UPDATE games SET last_error = NULL WHERE status = 'enriched' AND last_error IS NOT NULL`).run();
+    // A failed match defers the game a day. Clearing only the error text left it parked and invisible to the
+    // queue, so the button did not actually retry anything -- clear the deferral too.
+    const c = await env.DB.prepare(`UPDATE games SET next_match_at = NULL WHERE ppid IS NULL AND next_match_at IS NOT NULL AND next_match_at > ?`).bind(now()).run();
     await env.DB.prepare(`UPDATE games SET ps5_plan_at = NULL WHERE ps5_plan = 'unknown' AND ps5_plan_note IS NULL`).run();
     await setSetting(env.DB, 'ai_capped_until', null);
-    return { count: a.meta.changes, note: `${b.meta.changes} stale error notes cleared, AI stages unparked` };
+    return { count: a.meta.changes, note: `${b.meta.changes} error notes cleared, ${c.meta.changes} un-deferred for matching, AI stages unparked` };
   });
 }
 

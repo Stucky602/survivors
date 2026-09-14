@@ -257,11 +257,12 @@ async function handleApi(request, env, ctx) {
   }
 
   if (m === 'GET' && path === '/admin/settings') {
-    return json({ taste: { ...DEFAULT_SETTINGS, ...(await getSetting(env.DB, 'taste', {})) }, steam_tags: await getSetting(env.DB, 'steam_tags', []), extra_appids: await getSetting(env.DB, 'extra_appids', []), review_mode: await getSetting(env.DB, 'review_mode', 'auto') });
+    return json({ taste: { ...DEFAULT_SETTINGS, ...(await getSetting(env.DB, 'taste', {})) }, steam_tags: await getSetting(env.DB, 'steam_tags', []), extra_appids: await getSetting(env.DB, 'extra_appids', []), review_mode: await getSetting(env.DB, 'review_mode', 'auto'), psn_region: await getSetting(env.DB, 'psn_region', null), region_default: env.REGION || 'US' });
   }
   if (m === 'PUT' && path === '/admin/settings') {
     if (body.taste) await setSetting(env.DB, 'taste', body.taste);
     if (body.review_mode) await setSetting(env.DB, 'review_mode', body.review_mode === 'hybrid' ? 'hybrid' : 'auto');
+    if (body.psn_region !== undefined) await setSetting(env.DB, 'psn_region', body.psn_region ? String(body.psn_region).trim() : null);
     if (body.steam_tags) await setSetting(env.DB, 'steam_tags', body.steam_tags);
     if (body.extra_appids) await setSetting(env.DB, 'extra_appids', body.extra_appids.map(Number).filter(Boolean));
     return json({ ok: true });
