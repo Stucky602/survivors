@@ -151,6 +151,18 @@ export async function enrich(env, opts = {}) {
 }
 
 // Name variants for the PlatPrices search, most specific first. Console listings drop subtitles and add edition words.
+// PlatPrices' search has been observed returning INTERNAL_ERROR on titles containing en-dashes, exclamation
+// marks and apostrophes, so every query is reduced to plain words before it is sent.
+export function searchTerm(x) {
+  return String(x || '')
+    .replace(/[\u2010-\u2015\u2018\u2019\u201c\u201d]/g, ' ')
+    .replace(/[™®©]/g, '')
+    .replace(/[^\w\s&:-]/g, ' ')
+    .replace(/[:\-]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export function nameVariants(name) {
   const clean = (x) => x.replace(/[™®©]/g, '').replace(/\s+/g, ' ').trim();
   const full = clean(name);
@@ -159,7 +171,7 @@ export function nameVariants(name) {
   if (head && head.length >= 4 && head.toLowerCase() !== full.toLowerCase()) out.push(head);
   const stripped = clean(full.replace(/\b(complete|definitive|ultimate|deluxe|goty|game of the year|anniversary|remastered|enhanced|console|special|gold|premium|standard)\b\s*(edition)?/gi, '').replace(/\s*[:\u2013\u2014-]\s*$/, ''));
   if (stripped && stripped.length >= 4 && !out.some((o) => o.toLowerCase() === stripped.toLowerCase())) out.push(stripped);
-  return out.slice(0, 3);
+  return [...new Set(out.map(searchTerm).filter((x) => x.length >= 2))].slice(0, 3);
 }
 
 
@@ -287,27 +299,45 @@ export async function match(env, opts = {}) {
       if (failed >= 3 && n === 0) break;
       if (!(await canSpend(env.DB, 1))) { skipped++; continue; }
       try {
-        let cands = [];
+        let cands = [], searchError = null;
         for (const q of nameVariants(g.name)) {
           if (cands.length) break;
           if (!(await canSpend(env.DB, 1))) break;
-          cands = (await pp.searchGames(env, q)).filter((c) => Number(c.IsDLC) !== 1 && Number(c.IsDemoOrSoundtrack) !== 1);
+          try {
+            cands = (await pp.searchGames(env, q)).filter((c) => Number(c.IsDLC) !== 1 && Number(c.IsDemoOrSoundtrack) !== 1);
+            searchError = null;
+          } catch (e) {
+            // A server-side error on one phrasing is not fatal: try the next, simpler variant.
+            searchError = e;
+            if (!/INTERNAL_ERROR|HTTP 5/.test(String(e.message || e))) throw e;
+          }
         }
+        if (searchError && !cands.length) throw searchError;
         if (!cands.length) {
           await env.DB.prepare(`UPDATE games SET psn_status = 'not_listed', next_match_at = ? WHERE appid = ?`).bind(daysFromNow(7), g.appid).run();
           n++; continue;
         }
-        // Exact normalised title match wins outright -- no model judgement needed, and it cannot be lost to bad JSON.
-        const exact = pickByTitle(g.name, cands);
+        // Title agreement decides this on its own wherever it can. The model is a tiebreaker for genuinely
+        // ambiguous cases only -- it has proved unreliable at returning JSON, and a parse failure must never
+        // be mistaken for "this game is not on the store".
+        const ranked = cands
+          .map((c) => ({ c, sim: titleSimilarity(g.name, c.ProductName), full: String(c.StoreClass || '').toUpperCase() === 'FULL_GAME' }))
+          .sort((a, b) => (b.sim - a.sim) || (b.full - a.full) || ((Number(a.c.BasePrice) || 1e9) - (Number(b.c.BasePrice) || 1e9)));
+        const top = ranked[0] || null;
+        const runnerUp = ranked[1] || null;
+        // Confident when the best title is a strong match and nothing else is nearly as close.
+        const decisive = top && top.sim >= 0.6 && (!runnerUp || top.sim - runnerUp.sim >= 0.15 || top.sim >= 0.92);
         let ai = { json: null, text: '' };
-        if (!exact) {
+        if (!decisive && top && top.sim >= 0.35) {
           ai = await runJSON(env, { system: MATCH_SYSTEM, user: matchUser({ name: g.name, developer: g.developer, publisher: g.publisher, release: g.steam_release }, cands), maxTokens: 200, model: smallModel(env) });
         }
-        const pick = exact ? { ppid: exact.PPID, confidence: 1, reason: 'exact title match' } : (ai.json || {});
+        const pick = decisive
+          ? { ppid: top.c.PPID, confidence: Math.max(0.7, top.sim), reason: `title match ${top.sim.toFixed(2)}` }
+          : (ai.json || {});
         const chosen = cands.find((c) => Number(c.PPID) === Number(pick.ppid));
         const conf = Number(pick.confidence) || 0;
-        // A model that returned nothing parseable is not evidence the game is absent from the store.
-        const modelFailed = !exact && !ai.json;
+        // Only a genuinely ambiguous case that the model also failed to resolve counts as a failure.
+        const modelFailed = !decisive && !ai.json && top && top.sim >= 0.35;
         await env.DB.prepare(`INSERT INTO match_candidates (appid, candidates_json, ai_json, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(appid) DO UPDATE SET candidates_json = excluded.candidates_json, ai_json = excluded.ai_json, created_at = excluded.created_at`)
           .bind(g.appid, JSON.stringify(cands.slice(0, 40)), JSON.stringify(pick), now()).run();
         const mode = await getSetting(env.DB, 'review_mode', 'auto');
@@ -316,9 +346,6 @@ export async function match(env, opts = {}) {
           await acceptMatch(env, g.appid, chosen);
         } else if (chosen && conf >= 0.5 && mode !== 'auto') {
           await env.DB.prepare(`UPDATE games SET psn_status = 'review', next_match_at = NULL WHERE appid = ?`).bind(g.appid).run();
-        } else if (modelFailed && pickByTitle(g.name, cands, 0.6)) {
-          // Model unusable, but the titles line up well enough to accept rather than lose a real listing.
-          await acceptMatch(env, g.appid, pickByTitle(g.name, cands, 0.6));
         } else if (modelFailed) {
           // Retry sooner and say why, rather than declaring the game absent on the strength of a parse failure.
           failed++;

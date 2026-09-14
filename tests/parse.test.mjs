@@ -112,3 +112,15 @@ assert.equal(parseAppid('store.steampowered.com/app/2739020'), 2739020);
 assert.equal(parseAppid('not a game'), null);
 assert.equal(parseAppid(''), null);
 console.log('parse.test v0.13: ok');
+
+// v0.13.1: search terms must survive PlatPrices' parser
+import { searchTerm, nameVariants as nv2 } from '../worker/lib/stages.js';
+assert.equal(searchTerm('AHAPIKA – Heroic Agency'), 'AHAPIKA Heroic Agency');
+assert.equal(searchTerm("Oh No! I'm Surrounded by Polygons!"), 'Oh No I m Surrounded by Polygons');
+assert.equal(searchTerm('Deep Rock Galactic: Survivor™'), 'Deep Rock Galactic: Survivor');
+assert.equal(searchTerm('Nordic Ashes: Survivors of Ragnarok'), 'Nordic Ashes: Survivors of Ragnarok');
+// no variant may contain characters that broke the API
+for (const v of nv2('AHAPIKA – Heroic Agency')) assert.ok(!/[–—’!]/.test(v), `bad char in variant: ${v}`);
+for (const v of nv2("Oh No! I'm Surrounded by Polygons!")) assert.ok(!/[–—’!]/.test(v), `bad char in variant: ${v}`);
+assert.ok(nv2('AHAPIKA – Heroic Agency').length >= 1);
+console.log('parse.test v0.13.1: ok');
